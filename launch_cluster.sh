@@ -237,7 +237,7 @@ run_tui() {
                     continue
                 fi
                 
-                local selected_mmproj=$(file_picker "Select Multi-Modal Projection (Optional, .mmproj)" ".mmproj" "$(dirname "$selected_model")")
+                local selected_mmproj=$(file_picker "Select Multi-Modal Projection (Optional, .gguf)" ".gguf" "$(dirname "$selected_model")")
                 
                 clear
                 echo "================================================="
