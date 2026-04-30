@@ -185,7 +185,7 @@ launch_cluster() {
         tmux new-session -d -s "$session_name"
         
         # Construct launch command
-        local cmd="CUDA_VISIBLE_DEVICES=$gpu_list \"$LLAMA_SERVER\" --model \"$CLUSTER_MODEL\" -c $ctx_size -np $parallel_slots -fa --host 0.0.0.0 --port $port --tensor-split \"$tensor_split\" --split-mode layer --cont-batching"
+        local cmd="CUDA_VISIBLE_DEVICES=$gpu_list \"$LLAMA_SERVER\" --model \"$CLUSTER_MODEL\" -c $ctx_size -np $parallel_slots -fa on --host 0.0.0.0 --port $port --tensor-split \"$tensor_split\" --split-mode layer --cont-batching"
         
         if [[ -n "$CLUSTER_MMPROJ" ]]; then
             cmd="$cmd --mmproj \"$CLUSTER_MMPROJ\""
