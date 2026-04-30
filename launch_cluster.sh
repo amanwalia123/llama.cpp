@@ -2,7 +2,7 @@
 
 # ================= CONFIGURATION =================
 HOME_DIR="$HOME/llama-cluster"
-LLAMA_SERVER="$HOME_DIR/bin/llama-server"
+LLAMA_SERVER="./build/bin/llama-server"
 LOG_DIR="$HOME_DIR/logs"
 
 # Create necessary directories
