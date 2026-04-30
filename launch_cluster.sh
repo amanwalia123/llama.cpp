@@ -139,6 +139,8 @@ stop_cluster() {
 
 launch_cluster() {
     local num_groups=$1
+    local ctx_size=${2:-32768}
+    local parallel_slots=${3:-1}
     local total_gpus=$(detect_gpus)
     
     if [ "$num_groups" -gt "$total_gpus" ]; then
@@ -183,7 +185,7 @@ launch_cluster() {
         tmux new-session -d -s "$session_name"
         
         # Construct launch command
-        local cmd="CUDA_VISIBLE_DEVICES=$gpu_list \"$LLAMA_SERVER\" --model \"$CLUSTER_MODEL\" --host 0.0.0.0 --port $port --tensor-split \"$tensor_split\" --split-mode layer --cont-batching"
+        local cmd="CUDA_VISIBLE_DEVICES=$gpu_list \"$LLAMA_SERVER\" --model \"$CLUSTER_MODEL\" -c $ctx_size -np $parallel_slots -fa --host 0.0.0.0 --port $port --tensor-split \"$tensor_split\" --split-mode layer --cont-batching"
         
         if [[ -n "$CLUSTER_MMPROJ" ]]; then
             cmd="$cmd --mmproj \"$CLUSTER_MMPROJ\""
@@ -254,8 +256,17 @@ run_tui() {
                 fi
                 echo ""
                 
+                echo "--- Optimization Settings ---"
+                read -p "Context window size (e.g., 32768 for large images) [Default 32768]: " ctx_size
+                ctx_size=${ctx_size:-32768}
+                
+                read -p "Number of parallel sequence slots (keep low for heavy vision workloads) [Default 1]: " parallel_slots
+                parallel_slots=${parallel_slots:-1}
+                echo "-----------------------------"
+                echo ""
+                
                 setup_environment "$selected_model" "$selected_mmproj"
-                launch_cluster "$num_groups"
+                launch_cluster "$num_groups" "$ctx_size" "$parallel_slots"
                 
                 echo ""
                 read -p "Press Enter to return to menu..."
