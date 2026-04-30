@@ -3,7 +3,6 @@
 # ================= CONFIGURATION =================
 HOME_DIR="$HOME/llama-cluster"
 LLAMA_SERVER="$HOME_DIR/bin/llama-server"
-PRESET_FILE="$HOME_DIR/models.ini"
 LOG_DIR="$HOME_DIR/logs"
 
 # Create necessary directories
@@ -14,7 +13,6 @@ mkdir -p "$HOME_DIR/models"
 # ================= HELPER FUNCTIONS =================
 
 detect_gpus() {
-    # Try to detect GPUs using nvidia-smi
     if command -v nvidia-smi &> /dev/null; then
         local gpu_count=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | head -1)
         if [[ "$gpu_count" =~ ^[0-9]+$ ]]; then
@@ -22,10 +20,77 @@ detect_gpus() {
             return
         fi
     fi
-    echo "1" # Fallback to 1 GPU if nvidia-smi fails
+    echo "1" # Fallback
+}
+
+# TUI File Picker
+# Outputs UI to stderr and the selected file path to stdout
+file_picker() {
+    local prompt="$1"
+    local ext="$2"
+    local current_dir="${3:-.}"
+    
+    while true; do
+        clear >&2
+        echo "=================================================" >&2
+        echo " $prompt" >&2
+        echo " Filter: *$ext" >&2
+        echo " Current Directory: $(cd "$current_dir" && pwd)" >&2
+        echo "=================================================" >&2
+        
+        local items=("../")
+        
+        # Add directories (hide errors if no matches)
+        for d in "$current_dir"/*/; do
+            if [ -d "$d" ]; then
+                local bname="$(basename "$d")"
+                # skip hidden dirs if preferred, or just keep them
+                items+=("$bname/")
+            fi
+        done
+        
+        # Add files matching extension
+        if [ -n "$ext" ]; then
+            for f in "$current_dir"/*"$ext"; do
+                if [ -f "$f" ]; then
+                    items+=("$(basename "$f")")
+                fi
+            done
+        fi
+        
+        items+=("[Skip/None]")
+        
+        PS3="Select a directory or file: "
+        select item in "${items[@]}"; do
+            if [ -n "$item" ]; then
+                if [ "$item" = "[Skip/None]" ]; then
+                    echo ""
+                    return 0
+                elif [ "$item" = "../" ]; then
+                    # Go up one directory
+                    current_dir="$(cd "$current_dir/.." && pwd)"
+                    break
+                elif [[ "$item" == */ ]]; then
+                    # Go into directory
+                    current_dir="$current_dir/${item%/}"
+                    break
+                elif [ -f "$current_dir/$item" ]; then
+                    # File selected
+                    local full_path="$(cd "$current_dir" && pwd)/$item"
+                    echo "$full_path"
+                    return 0
+                fi
+            else
+                echo "Invalid selection." >&2
+            fi
+        done
+    done
 }
 
 setup_environment() {
+    local model_path="$1"
+    local mmproj_path="$2"
+    
     echo "📦 Setting up environment in $HOME_DIR..."
     
     # Copy binary to home directory
@@ -36,38 +101,36 @@ setup_environment() {
         echo "⚠️  llama-server not found in ./build/bin/ (You may need to build it first)"
     fi
 
-    # Parse and copy models to home directory NVMe
-    > "$PRESET_FILE"
-    if [[ -f "./models.ini" ]]; then
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            if [[ $line =~ ^[a-zA-Z0-9] && $line == *"="* ]]; then
-                local key=$(echo "$line" | cut -d'=' -f1 | tr -d ' ')
-                local value=$(echo "$line" | cut -d'=' -f2- | sed 's/^[[:space:]]*//')
-                
-                if [[ "$key" == "model" || "$key" == "mmproj" ]]; then
-                    local filename=$(basename "$value")
-                    local dest="$HOME_DIR/models/$filename"
-                    if [[ -f "$value" && ! -f "$dest" ]]; then
-                        echo "   -> Copying $filename to $HOME_DIR/models/"
-                        cp "$value" "$dest"
-                    fi
-                    # Write the updated path to the preset
-                    echo "$key = $dest" >> "$PRESET_FILE"
-                else
-                    echo "$line" >> "$PRESET_FILE"
-                fi
-            else
-                # Keep section headers and comments
-                echo "$line" >> "$PRESET_FILE"
-            fi
-        done < "./models.ini"
+    # Copy selected models to NVMe
+    if [[ -n "$model_path" && -f "$model_path" ]]; then
+        local model_filename=$(basename "$model_path")
+        local dest_model="$HOME_DIR/models/$model_filename"
+        if [[ ! -f "$dest_model" ]]; then
+            echo "   -> Copying $model_filename to $HOME_DIR/models/"
+            cp "$model_path" "$dest_model"
+        else
+            echo "   -> $model_filename already exists in $HOME_DIR/models/"
+        fi
+        export CLUSTER_MODEL="$dest_model"
     fi
+
+    if [[ -n "$mmproj_path" && -f "$mmproj_path" ]]; then
+        local mmproj_filename=$(basename "$mmproj_path")
+        local dest_mmproj="$HOME_DIR/models/$mmproj_filename"
+        if [[ ! -f "$dest_mmproj" ]]; then
+            echo "   -> Copying $mmproj_filename to $HOME_DIR/models/"
+            cp "$mmproj_path" "$dest_mmproj"
+        else
+            echo "   -> $mmproj_filename already exists in $HOME_DIR/models/"
+        fi
+        export CLUSTER_MMPROJ="$dest_mmproj"
+    fi
+    
     echo "✅ Setup complete."
 }
 
 stop_cluster() {
     echo "🛑 Stopping all llama-server tmux sessions..."
-    # Find and kill all tmux sessions starting with 'llama-server-'
     tmux ls 2>/dev/null | grep "^llama-server-" | cut -d: -f1 | while read -r session; do
         tmux kill-session -t "$session"
     done
@@ -80,6 +143,11 @@ launch_cluster() {
     
     if [ "$num_groups" -gt "$total_gpus" ]; then
         echo "❌ Error: Cannot create more groups ($num_groups) than available GPUs ($total_gpus)."
+        exit 1
+    fi
+    
+    if [ -z "$CLUSTER_MODEL" ]; then
+        echo "❌ Error: No model file provided or selected."
         exit 1
     fi
     
@@ -112,13 +180,18 @@ launch_cluster() {
         
         echo "   -> Starting $session_name on port $port (GPUs: $gpu_list)"
         
-        # Create a detached tmux session
         tmux new-session -d -s "$session_name"
         
-        # Construct the launch command and pipe output to log file
-        local cmd="CUDA_VISIBLE_DEVICES=$gpu_list \"$LLAMA_SERVER\" --models-preset \"$PRESET_FILE\" --host 0.0.0.0 --port $port --tensor-split \"$tensor_split\" --split-mode layer --cont-batching 2>&1 | tee \"$LOG_DIR/$session_name.log\""
+        # Construct launch command
+        local cmd="CUDA_VISIBLE_DEVICES=$gpu_list \"$LLAMA_SERVER\" --model \"$CLUSTER_MODEL\" --host 0.0.0.0 --port $port --tensor-split \"$tensor_split\" --split-mode layer --cont-batching"
         
-        # Send the command to the tmux session and hit Enter
+        if [[ -n "$CLUSTER_MMPROJ" ]]; then
+            cmd="$cmd --mmproj \"$CLUSTER_MMPROJ\""
+        fi
+        
+        cmd="$cmd 2>&1 | tee \"$LOG_DIR/$session_name.log\""
+        
+        # Send command
         tmux send-keys -t "$session_name" "$cmd" C-m
         
         gpu_index=$((gpu_index + gpus_per_group))
@@ -130,53 +203,75 @@ launch_cluster() {
 }
 
 run_tui() {
-    clear
-    echo "================================================="
-    echo "        llama.cpp Cluster Configuration        "
-    echo "================================================="
-    echo ""
-    
-    local total_gpus=$(detect_gpus)
-    echo "Detected GPUs: $total_gpus"
-    echo ""
-    
-    echo "Select Action:"
-    local actions=("Start Cluster" "Stop Cluster" "Setup Environment Only" "Exit")
-    PS3="Enter choice [1-${#actions[@]}]: "
-    local action=""
-    select a in "${actions[@]}"; do
-        if [ -n "$a" ]; then
-            action="$a"
-            break
-        else
-            echo "Invalid selection. Please try again."
-        fi
-    done
-    
-    case "$action" in
-        "Start Cluster")
-            echo ""
-            read -p "Enter number of sub-clusters to create: " num_groups
-            if [[ ! "$num_groups" =~ ^[0-9]+$ ]] || [ "$num_groups" -lt 1 ]; then
-                echo "Invalid input. Defaulting to 1."
-                num_groups=1
+    while true; do
+        clear
+        echo "================================================="
+        echo "        llama.cpp Cluster Configuration        "
+        echo "================================================="
+        echo ""
+        
+        local total_gpus=$(detect_gpus)
+        echo "Detected GPUs: $total_gpus"
+        echo ""
+        
+        echo "Select Action:"
+        local actions=("Start Cluster" "Stop Cluster" "Exit")
+        PS3="Enter choice [1-${#actions[@]}]: "
+        local action=""
+        select a in "${actions[@]}"; do
+            if [ -n "$a" ]; then
+                action="$a"
+                break
+            else
+                echo "Invalid selection. Please try again."
             fi
-            echo ""
-            setup_environment
-            launch_cluster "$num_groups"
-            ;;
-        "Stop Cluster")
-            echo ""
-            stop_cluster
-            ;;
-        "Setup Environment Only")
-            echo ""
-            setup_environment
-            ;;
-        "Exit")
-            exit 0
-            ;;
-    esac
+        done
+        
+        case "$action" in
+            "Start Cluster")
+                # Interactive File Selection
+                local selected_model=$(file_picker "Select Primary Model (.gguf)" ".gguf")
+                if [ -z "$selected_model" ]; then
+                    echo "Model selection skipped. Returning to menu."
+                    sleep 2
+                    continue
+                fi
+                
+                local selected_mmproj=$(file_picker "Select Multi-Modal Projection (Optional, .mmproj)" ".mmproj" "$(dirname "$selected_model")")
+                
+                clear
+                echo "================================================="
+                echo "Configuration Summary:"
+                echo "Model:   $selected_model"
+                echo "MMProj:  ${selected_mmproj:-None}"
+                echo "================================================="
+                echo ""
+                
+                read -p "Enter number of sub-clusters to create: " num_groups
+                if [[ ! "$num_groups" =~ ^[0-9]+$ ]] || [ "$num_groups" -lt 1 ]; then
+                    echo "Invalid input. Defaulting to 1."
+                    num_groups=1
+                fi
+                echo ""
+                
+                setup_environment "$selected_model" "$selected_mmproj"
+                launch_cluster "$num_groups"
+                
+                echo ""
+                read -p "Press Enter to return to menu..."
+                ;;
+            "Stop Cluster")
+                echo ""
+                stop_cluster
+                echo ""
+                read -p "Press Enter to return to menu..."
+                ;;
+            "Exit")
+                clear
+                exit 0
+                ;;
+        esac
+    done
 }
 
 # ================= MAIN =================
@@ -192,18 +287,13 @@ if [ $# -eq 0 ]; then
 else
     # Support for CLI invocation for automation
     case "$1" in
-        start)
-            setup_environment
-            launch_cluster "${2:-1}"
-            ;;
         stop)
             stop_cluster
             ;;
-        setup)
-            setup_environment
-            ;;
         *)
-            echo "Usage: $0 {start|stop|setup} [num_groups]"
+            echo "Usage: $0"
+            echo "  Run without arguments to launch the interactive cluster TUI."
+            echo "  $0 stop   - Stop all running cluster instances."
             ;;
     esac
 fi
