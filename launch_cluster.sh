@@ -23,6 +23,18 @@ detect_gpus() {
     echo "1" # Fallback
 }
 
+detect_cpu_threads() {
+    if command -v nproc &> /dev/null; then
+        nproc
+        return
+    fi
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        sysctl -n hw.logicalcpu 2>/dev/null || echo "8"
+        return
+    fi
+    echo "8"
+}
+
 # TUI File Picker
 # Outputs UI to stderr and the selected file path to stdout
 file_picker() {
@@ -139,8 +151,12 @@ stop_cluster() {
 
 launch_cluster() {
     local num_groups=$1
-    local ctx_size=${2:-32768}
-    local parallel_slots=${3:-1}
+    local ctx_size=${2:-16384}
+    local parallel_slots=${3:-4}
+    local batch_size=${4:-2048}
+    local ubatch_size=${5:-512}
+    local threads=${6:-$(detect_cpu_threads)}
+    local threads_http=${7:-8}
     local total_gpus=$(detect_gpus)
     
     if [ "$num_groups" -gt "$total_gpus" ]; then
@@ -184,8 +200,25 @@ launch_cluster() {
         
         tmux new-session -d -s "$session_name"
         
-        # Construct launch command
-        local cmd="CUDA_VISIBLE_DEVICES=$gpu_list \"$LLAMA_SERVER\" --model \"$CLUSTER_MODEL\" -c $ctx_size -np $parallel_slots -fa on --host 0.0.0.0 --port $port --tensor-split \"$tensor_split\" --split-mode layer --cont-batching"
+        # Construct high-throughput launch command optimized for OpenAI API
+        local cmd="CUDA_VISIBLE_DEVICES=$gpu_list \"$LLAMA_SERVER\" \\
+          --model \"$CLUSTER_MODEL\" \\
+          -c $ctx_size \\
+          -np $parallel_slots \\
+          -b $batch_size \\
+          -ub $ubatch_size \\
+          -t $threads \\
+          -tb $threads \\
+          --threads-http $threads_http \\
+          -fa on \\
+          --host 0.0.0.0 \\
+          --port $port \\
+          --tensor-split \"$tensor_split\" \\
+          --split-mode layer \\
+          --cont-batching \\
+          --cache-prompt \\
+          --cache-reuse 256 \\
+          --metrics"
         
         if [[ -n "$CLUSTER_MMPROJ" ]]; then
             cmd="$cmd --mmproj \"$CLUSTER_MMPROJ\""
@@ -257,16 +290,29 @@ run_tui() {
                 echo ""
                 
                 echo "--- Optimization Settings ---"
-                read -p "Context window size (e.g., 32768 for large images) [Default 32768]: " ctx_size
-                ctx_size=${ctx_size:-32768}
+                read -p "Context window size (text: 8192-16384, vision: 32768+) [Default 16384]: " ctx_size
+                ctx_size=${ctx_size:-16384}
                 
-                read -p "Number of parallel sequence slots (keep low for heavy vision workloads) [Default 1]: " parallel_slots
-                parallel_slots=${parallel_slots:-1}
+                read -p "Parallel slots for concurrent requests (-np) [Default 4]: " parallel_slots
+                parallel_slots=${parallel_slots:-4}
+                
+                read -p "Batch size for GPU utilization (-b) [Default 2048]: " batch_size
+                batch_size=${batch_size:-2048}
+                
+                read -p "Physical batch size (-ub) [Default 512]: " ubatch_size
+                ubatch_size=${ubatch_size:-512}
+                
+                local detected_threads=$(detect_cpu_threads)
+                read -p "CPU threads for decode/prefill (-t) [Default $detected_threads]: " threads
+                threads=${threads:-$detected_threads}
+                
+                read -p "HTTP worker threads (--threads-http) [Default 8]: " threads_http
+                threads_http=${threads_http:-8}
                 echo "-----------------------------"
                 echo ""
                 
                 setup_environment "$selected_model" "$selected_mmproj"
-                launch_cluster "$num_groups" "$ctx_size" "$parallel_slots"
+                launch_cluster "$num_groups" "$ctx_size" "$parallel_slots" "$batch_size" "$ubatch_size" "$threads" "$threads_http"
                 
                 echo ""
                 read -p "Press Enter to return to menu..."
