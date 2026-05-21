@@ -10,6 +10,7 @@
 
 [Manifesto](https://github.com/ggml-org/llama.cpp/discussions/205) / [ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md)
 
+---
 LLM inference in C/C++
 
 ## ⚡ One-line install
@@ -40,6 +41,8 @@ Already have the repo cloned? Just run:
 ```bash
 cd llama.cpp && ./install.sh
 ```
+
+---
 
 ## Recent API changes
 
