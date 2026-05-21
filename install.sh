@@ -36,6 +36,9 @@
 #   --help
 #       Show this help message
 #
+# Quick install (one-liner):
+#   bash -c 'git clone --depth 1 --recurse-submodules https://github.com/ggml-org/llama.cpp && cd llama.cpp && ./install.sh'
+#
 # After installation, start the server with:
 #   llama-server --models-preset ~/.llama/models.ini
 #
@@ -47,7 +50,7 @@ set -euo pipefail
 INSTALL_DIR="${HOME}/.bin"
 MODELS_DIR="${HOME}/.llama/models"
 BUILD_DIR="${HOME}/.llama/build"
-REPO_DIR="${BUILD_DIR}/src"
+REPO_DIR=""
 REPO_URL="https://github.com/ggml-org/llama.cpp"
 REPO_BRANCH="master"
 BACKEND=""          # empty = auto-detect
@@ -56,6 +59,13 @@ JOBS=128
 MODELS_SOURCE=""
 SKIP_CLONE=false
 SKIP_BUILD=false
+
+# Detect if install.sh is being run from inside a llama.cpp checkout
+IN_REPO=false
+if [[ -d .git && -f CMakeLists.txt ]]; then
+    IN_REPO=true
+    REPO_DIR="$(pwd)"
+fi
 
 LLAMA_MODELS_INI="${HOME}/.llama/models.ini"
 
@@ -272,6 +282,15 @@ parse_args() {
 # ─── Build steps ──────────────────────────────────────────────────────────────
 
 do_clone() {
+    # Already inside a llama.cpp repo — no clone needed
+    if [[ "$IN_REPO" == true ]]; then
+        log_info "Running from inside llama.cpp repo: ${REPO_DIR}"
+        return
+    fi
+
+    # Default: clone into build directory
+    REPO_DIR="${BUILD_DIR}/src"
+
     if [[ -d "${REPO_DIR}/.git" && "$SKIP_CLONE" == true ]]; then
         log_info "Repo already exists at ${REPO_DIR}, pulling latest..."
         git -C "$REPO_DIR" fetch --tags origin "$REPO_BRANCH"
@@ -441,6 +460,7 @@ main() {
     echo "║  Backend:      ${BACKEND:-auto}"
     echo "║  Build type:   ${BUILD_TYPE}"
     echo "║  Jobs:         ${JOBS}"
+    echo "║  Repo dir:     ${REPO_DIR:-will be cloned}"
     echo "║  Install dir:  ${INSTALL_DIR}"
     echo "║  Models dir:   ${MODELS_DIR}"
     echo "║  Models src:   ${MODELS_SOURCE:-(none)}"
