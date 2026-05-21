@@ -12,6 +12,35 @@
 
 LLM inference in C/C++
 
+## ⚡ One-line install
+
+> Clone the repo, build, install, and generate model presets — all in one command.
+
+```bash
+bash -c 'git clone --depth 1 --recurse-submodules https://github.com/ggml-org/llama.cpp && cd llama.cpp && ./install.sh'
+```
+
+Auto-detects your GPU backend (CUDA / Metal / Vulkan / CPU) and installs `llama-server`, `llama-cli`, and `llama-quantize` to `~/.bin/`. Pass extra flags by appending them inside the command:
+
+```bash
+bash -c 'git clone --depth 1 --recurse-submodules https://github.com/ggml-org/llama.cpp && cd llama.cpp && ./install.sh --backend cuda --models-source /path/to/models'
+```
+
+| Option | Description | Default |
+|--------|-------------|----------|
+| `--backend` | `cuda`, `metal`, `vulkan`, `hip`, `sycl`, `cann`, `opencl`, `cpu` | auto-detect |
+| `--models-source` | Comma-separated dirs to scan for `.gguf` models | *(none)* |
+| `--install-dir` | Directory for symlinking binaries | `~/.bin` |
+| `--models-dir` | Destination for copied models | `~/.llama/models` |
+| `--build-type` | CMake build type | `Release` |
+| `--jobs` | Parallel build jobs | `128` |
+
+Already have the repo cloned? Just run:
+
+```bash
+cd llama.cpp && ./install.sh
+```
+
 ## Recent API changes
 
 - [Changelog for `libllama` API](https://github.com/ggml-org/llama.cpp/issues/9289)
