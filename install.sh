@@ -467,10 +467,14 @@ main() {
     echo "╚══════════════════════════════════════════════════════╝"
     echo ""
 
-    do_clone
-    do_configure
-    do_build
-    do_install
+    if [[ "$SKIP_BUILD" == true ]]; then
+        log_info "Skipping build (--skip-build)."
+    else
+        do_clone
+        do_configure
+        do_build
+        do_install
+    fi
 
     echo ""
     do_models

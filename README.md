@@ -18,13 +18,29 @@ LLM inference in C/C++
 > Clone the repo, build, install, and generate model presets — all in one command.
 
 ```bash
-bash -c 'git clone --depth 1 --recurse-submodules https://github.sec.samsung.net/aman-walia/llama.cpp && cd llama.cpp && ./install.sh'
+bash -c 'git clone --depth 1 --recurse-submodules https://github.com/ggml-org/llama.cpp && cd llama.cpp && ./install.sh'
 ```
 
-Auto-detects your GPU backend (CUDA / Metal / Vulkan / CPU) and installs `llama-server`, `llama-cli`, and `llama-quantize` to `~/.bin/`. Pass extra flags by appending them inside the command:
+Auto-detects your GPU backend (CUDA / Metal / Vulkan / CPU) and installs `llama-server`, `llama-cli`, and `llama-quantize` to `~/.bin/`.
+
+### Using models from shared storage (NAS)
+
+If your organization stores models in a shared location, `--models-source` copies them to your home directory for fast local loading — no downloads needed:
 
 ```bash
-bash -c 'git clone --depth 1 --recurse-submodules https://github.sec.samsung.net/aman-walia/llama.cppp && cd llama.cpp && ./install.sh --backend cuda --models-source /path/to/models'
+bash -c 'git clone --depth 1 --recurse-submodules https://github.com/ggml-org/llama.cpp && cd llama.cpp && ./install.sh --models-source /mnt/nas/models'
+```
+
+Re-run with `--skip-build` to only refresh models and presets (skips the full rebuild):
+
+```bash
+cd llama.cpp && ./install.sh --skip-build --models-source /mnt/nas/models
+```
+
+Multiple source directories are supported (comma-separated):
+
+```bash
+./install.sh --models-source /mnt/nas/models,/mnt/nas/fine-tuned
 ```
 
 | Option | Description | Default |
@@ -35,6 +51,7 @@ bash -c 'git clone --depth 1 --recurse-submodules https://github.sec.samsung.net
 | `--models-dir` | Destination for copied models | `~/.llama/models` |
 | `--build-type` | CMake build type | `Release` |
 | `--jobs` | Parallel build jobs | `128` |
+| `--skip-build` | Skip clone/build/install — only copy models + regenerate presets | `false` |
 
 Already have the repo cloned? Just run:
 
