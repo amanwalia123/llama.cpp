@@ -18,7 +18,7 @@ LLM inference in C/C++
 > Clone the repo, build, install, and generate model presets — all in one command.
 
 ```bash
-bash -c 'git clone --depth 1 --recurse-submodules https://github.com/ggml-org/llama.cpp && cd llama.cpp && ./install.sh'
+bash -c 'git clone --depth 1 --recurse-submodules https://github.sec.samsung.net/aman-walia/llama.cpp && cd llama.cpp && ./install.sh'
 ```
 
 Auto-detects your GPU backend (CUDA / Metal / Vulkan / CPU) and installs `llama-server`, `llama-cli`, and `llama-quantize` to `~/.bin/`.
@@ -28,19 +28,19 @@ Auto-detects your GPU backend (CUDA / Metal / Vulkan / CPU) and installs `llama-
 If your organization stores models in a shared location, `--models-source` copies them to your home directory for fast local loading — no downloads needed:
 
 ```bash
-bash -c 'git clone --depth 1 --recurse-submodules https://github.com/ggml-org/llama.cpp && cd llama.cpp && ./install.sh --models-source /mnt/nas/models'
+bash -c 'git clone --depth 1 --recurse-submodules https://github.sec.samsung.net/aman-walia/llama.cpp && cd llama.cpp && chmod +x ./install.sh && ./install.sh --models-source /netapp/output/aman.walia/share/models'
 ```
 
 Re-run with `--skip-build` to only refresh models and presets (skips the full rebuild):
 
 ```bash
-cd llama.cpp && ./install.sh --skip-build --models-source /mnt/nas/models
+cd llama.cpp && ./install.sh --skip-build --models-source /netapp/output/aman.walia/share/models
 ```
 
 Multiple source directories are supported (comma-separated):
 
 ```bash
-./install.sh --models-source /mnt/nas/models,/mnt/nas/fine-tuned
+./install.sh --models-source /netapp/output/aman.walia/share/models,/mnt/nas/fine-tuned
 ```
 
 | Option | Description | Default |
