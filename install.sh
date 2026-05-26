@@ -109,7 +109,7 @@ install_prerequisites() {
         case "$m" in
             git) pkgs+=("git") ;;
             cmake) pkgs+=("cmake") ;;
-            "a C++ compiler*") pkgs+=("build-essential" "g++") ;;
+            "a C++ compiler"*) pkgs+=("build-essential" "g++") ;;
         esac
     done
 
@@ -130,7 +130,7 @@ install_prerequisites() {
     # Verify installation
     local still_missing=()
     for m in "${missing[@]}"; do
-        if [[ "$m" == "a C++ compiler*" ]]; then
+        if [[ "$m" == *"C++ compiler"* ]]; then
             # Check both PATH and common locations
             if ! command -v g++ >/dev/null 2>&1 && ! command -v clang++ >/dev/null 2>&1 && ! command -v c++ >/dev/null 2>&1; then
                 if [[ -x /usr/bin/g++ ]] || [[ -x /usr/local/bin/g++ ]]; then
@@ -153,6 +153,16 @@ install_prerequisites() {
 
 # Check that required tools are available
 check_prerequisites() {
+    # Ensure build-essential is installed on Debian/Ubuntu systems
+    if [[ -f /etc/debian_version ]]; then
+        if ! dpkg -s build-essential >/dev/null 2>&1; then
+            log_info "Installing build-essential (C++ compiler, make, etc.)"
+            sudo apt-get update -qq
+            sudo apt-get install -y build-essential
+            log_ok "Installed build-essential"
+        fi
+    fi
+
     local missing=()
     command -v git >/dev/null 2>&1 || missing+=("git")
     command -v cmake >/dev/null 2>&1 || missing+=("cmake")
