@@ -109,7 +109,7 @@ install_prerequisites() {
         case "$m" in
             git) pkgs+=("git") ;;
             cmake) pkgs+=("cmake") ;;
-            "a C++ compiler*") pkgs+=("build-essential") ;;
+            "a C++ compiler*") pkgs+=("build-essential" "g++") ;;
         esac
     done
 
@@ -117,7 +117,7 @@ install_prerequisites() {
         apt-get)
             export DEBIAN_FRONTEND=noninteractive
             sudo apt-get update -qq
-            sudo apt-get install -y "${pkgs[@]}"
+            sudo apt-get install -y --reinstall "${pkgs[@]}" 2>/dev/null || sudo apt-get install -y "${pkgs[@]}"
             ;;
         dnf|yum)
             sudo $pkg_manager install -y "${pkgs[@]}"
@@ -131,7 +131,15 @@ install_prerequisites() {
     local still_missing=()
     for m in "${missing[@]}"; do
         if [[ "$m" == "a C++ compiler*" ]]; then
-            command -v g++ >/dev/null 2>&1 || command -v clang++ >/dev/null 2>&1 || command -v c++ >/dev/null 2>&1 || still_missing+=("$m")
+            # Check both PATH and common locations
+            if ! command -v g++ >/dev/null 2>&1 && ! command -v clang++ >/dev/null 2>&1 && ! command -v c++ >/dev/null 2>&1; then
+                if [[ -x /usr/bin/g++ ]] || [[ -x /usr/local/bin/g++ ]]; then
+                    log_info "Found g++ at /usr/bin, adding to PATH"
+                    export PATH="/usr/bin:/usr/local/bin:$PATH"
+                else
+                    still_missing+=("$m")
+                fi
+            fi
         else
             command -v "$m" >/dev/null 2>&1 || still_missing+=("$m")
         fi
