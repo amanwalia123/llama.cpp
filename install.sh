@@ -25,7 +25,7 @@
 #   --build-dir <dir>
 #       Parent directory for build artifacts (default: ~/.llama/build)
 #   --repo-url <url>
-#       Git repository URL (default: https://github.com/ggml-org/llama.cpp)
+#       Git repository URL (default: https://github.sec.samsung.net/aman-walia/llama.cpp)
 #   --repo-branch <branch>
 #       Git branch to checkout (default: master)
 #   --skip-clone
@@ -37,7 +37,7 @@
 #       Show this help message
 #
 # Quick install (one-liner):
-#   bash -c 'git clone --depth 1 --recurse-submodules https://github.com/ggml-org/llama.cpp && cd llama.cpp && ./install.sh'
+#   bash -c 'git clone --depth 1 --recurse-submodules https://github.sec.samsung.net/aman-walia/llama.cpp && cd llama.cpp && ./install.sh'
 #
 # After installation, start the server with:
 #   llama-server --models-preset ~/.llama/models.ini
@@ -51,7 +51,7 @@ INSTALL_DIR="${HOME}/.bin"
 MODELS_DIR="${HOME}/.llama/models"
 BUILD_DIR="${HOME}/.llama/build"
 REPO_DIR=""
-REPO_URL="https://github.com/ggml-org/llama.cpp"
+REPO_URL="https://github.sec.samsung.net/aman-walia/llama.cpp"
 REPO_BRANCH="master"
 BACKEND=""          # empty = auto-detect
 BUILD_TYPE="Release"
