@@ -83,6 +83,66 @@ show_help() {
 
 die() { log_error "$@"; exit 1; }
 
+# Detect and install missing build tools
+install_prerequisites() {
+    local missing=($@)
+
+    local pkg_manager=""
+    if command -v apt-get >/dev/null 2>&1; then
+        pkg_manager="apt-get"
+    elif command -v dnf >/dev/null 2>&1; then
+        pkg_manager="dnf"
+    elif command -v yum >/dev/null 2>&1; then
+        pkg_manager="yum"
+    elif command -v pacman >/dev/null 2>&1; then
+        pkg_manager="pacman"
+    else
+        die "No supported package manager found (apt, dnf, yum, pacman). Install these tools manually: ${missing[*]}"
+    fi
+
+    log_info "Installing missing tools via $pkg_manager: ${missing[*]}"
+    echo ""
+
+    # Map human-readable names to package names
+    local pkgs=()
+    for m in "${missing[@]}"; do
+        case "$m" in
+            git) pkgs+=("git") ;;
+            cmake) pkgs+=("cmake") ;;
+            "a C++ compiler*") pkgs+=("build-essential") ;;
+        esac
+    done
+
+    case "$pkg_manager" in
+        apt-get)
+            export DEBIAN_FRONTEND=noninteractive
+            sudo apt-get update -qq
+            sudo apt-get install -y "${pkgs[@]}"
+            ;;
+        dnf|yum)
+            sudo $pkg_manager install -y "${pkgs[@]}"
+            ;;
+        pacman)
+            sudo pacman -Syu --noconfirm --needed "${pkgs[@]}"
+            ;;
+    esac
+
+    # Verify installation
+    local still_missing=()
+    for m in "${missing[@]}"; do
+        if [[ "$m" == "a C++ compiler*" ]]; then
+            command -v g++ >/dev/null 2>&1 || command -v clang++ >/dev/null 2>&1 || command -v c++ >/dev/null 2>&1 || still_missing+=("$m")
+        else
+            command -v "$m" >/dev/null 2>&1 || still_missing+=("$m")
+        fi
+    done
+    if [[ ${#still_missing[@]} -gt 0 ]]; then
+        die "Failed to install: ${still_missing[*]}"
+    fi
+    log_ok "Installed: ${missing[*]}"
+    echo ""
+}
+
 # Check that required tools are available
 check_prerequisites() {
     local missing=()
@@ -93,7 +153,11 @@ check_prerequisites() {
         missing+=("a C++ compiler (g++, clang++, or c++)")
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
-        die "Missing required tools: ${missing[*]}"
+        if [[ -t 0 ]]; then
+            install_prerequisites "${missing[@]}"
+        else
+            die "Missing required tools: ${missing[*]}"
+        fi
     fi
 }
 
