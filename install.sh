@@ -109,7 +109,7 @@ install_prerequisites() {
         case "$m" in
             git) pkgs+=("git") ;;
             cmake) pkgs+=("cmake") ;;
-            "a C++ compiler"*) pkgs+=("build-essential" "g++") ;;
+            "a C++ compiler"*) pkgs+=("g++") ;;
         esac
     done
 
@@ -179,22 +179,112 @@ check_prerequisites() {
     fi
 }
 
+# Locate nvcc in any of the common CUDA installation locations
+find_nvcc() {
+    # 1. Already on PATH
+    if command -v nvcc >/dev/null 2>&1; then
+        command -v nvcc
+        return 0
+    fi
+
+    # 2. Standard CUDA toolkit paths (newest version first)
+    for path in \
+        /usr/local/cuda/bin/nvcc \
+        /usr/bin/nvcc \
+        /opt/cuda/bin/nvcc \
+    ; do
+        if [[ -x "$path" ]]; then
+            echo "$path"
+            return 0
+        fi
+    done
+
+    # 3. Versioned CUDA installations: /usr/local/cuda-X.Y/bin/nvcc
+    if ls /usr/local/cuda-*/bin/nvcc >/dev/null 2>&1; then
+        ls -d /usr/local/cuda-*/bin/nvcc | sort -V | tail -n1
+        return 0
+    fi
+
+    # 4. Conda environments
+    if [[ -n "${CONDA_PREFIX:-}" ]] && [[ -x "${CONDA_PREFIX}/bin/nvcc" ]]; then
+        echo "${CONDA_PREFIX}/bin/nvcc"
+        return 0
+    fi
+    if [[ -d "${HOME}/.conda/envs" ]]; then
+        for env_dir in "${HOME}/.conda/envs"/*/bin/nvcc; do
+            if [[ -x "$env_dir" ]]; then
+                echo "$env_dir"
+                return 0
+            fi
+        done
+    fi
+
+    # 5. WSL / Windows NVIDIA path
+    if [[ -x /mnt/c/Program\ Files/NVIDIA\ GPU\ Computing\ Toolkit/CUDA/bin/nvcc ]]; then
+        echo "/mnt/c/Program\ Files/NVIDIA\ GPU\ Computing\ Toolkit/CUDA/bin/nvcc"
+        return 0
+    fi
+
+    return 1
+}
+
+# Verify NVIDIA GPU drivers are actually available
+has_nvidia_driver() {
+    # Check for libcuda (the kernel driver interface)
+    if ldconfig -p 2>/dev/null | grep -q libcuda.so; then
+        return 0
+    fi
+    if [[ -f /dev/nvidia0 ]]; then
+        return 0
+    fi
+    if lspci 2>/dev/null | grep -qi 'nvidia.*vga'; then
+        # GPU exists; assume driver will work
+        return 0
+    fi
+    return 1
+}
+
 # Auto-detect the best available backend
 detect_backend() {
-    if command -v nvcc >/dev/null 2>&1; then
-        echo "cuda"
+    # Check for CUDA
+    local nvcc_path
+    if nvcc_path="$(find_nvcc)"; then
+        # Found nvcc — verify drivers before committing to CUDA
+        if has_nvidia_driver; then
+            log_info "Found CUDA: ${nvcc_path}"
+            echo "cuda"
+            return
+        else
+            log_warn "Found nvcc (${nvcc_path}) but no NVIDIA driver detected — falling back"
+        fi
+    fi
+
+    # Check for ROCm/HIP
+    if command -v hipcc >/dev/null 2>&1; then
+        echo "hip"
         return
     fi
-    # Check for CUDA toolkit in common locations
-    if [[ -f /usr/local/cuda/bin/nvcc ]]; then
-        echo "cuda"
+    if [[ -f /opt/rocm/bin/hipcc ]]; then
+        echo "hip"
         return
     fi
+
+    # Check for Vulkan
+    if dpkg -l 2>/dev/null | grep -q 'vulkan-sdk\|vulkan-tools'; then
+        echo "vulkan"
+        return
+    fi
+    if command -v vulkaninfo >/dev/null 2>&1; then
+        echo "vulkan"
+        return
+    fi
+
     # macOS defaults to Metal
     if [[ "$(uname)" == "Darwin" ]]; then
         echo "metal"
         return
     fi
+
     echo "cpu"
 }
 
@@ -423,14 +513,17 @@ do_configure() {
             )
             # Locate nvcc
             if [[ -z "${CUDACXX:-}" ]]; then
-                if [[ -f /usr/local/cuda/bin/nvcc ]]; then
-                    export CUDACXX="/usr/local/cuda/bin/nvcc"
-                elif command -v nvcc >/dev/null 2>&1; then
-                    export CUDACXX="nvcc"
+                local nvcc_path
+                if nvcc_path="$(find_nvcc)"; then
+                    export CUDACXX="$nvcc_path"
+                    log_info "Using nvcc: ${CUDACXX}"
+                else
+                    die "CUDA backend selected but nvcc not found. Install nvidia-cuda-toolkit or specify --backend cpu."
                 fi
             fi
             local cuda_dir
-            cuda_dir="$(dirname "$(dirname "${CUDACXX:-/usr/local/cuda/bin/nvcc}")")"
+            cuda_dir="$(dirname "$(dirname "${CUDACXX}")")"
+            log_info "CUDA toolkit root: ${cuda_dir}"
             if [[ -n "${CMAKE_PREFIX_PATH:-}" ]]; then
                 export CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}:${cuda_dir}"
             else
