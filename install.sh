@@ -322,7 +322,7 @@ copy_models() {
             cp -f "$src_file" "$dest_file"
             count=$((count + 1))
             log_info "Copied: $rel_path"
-        done < <(find "$dir" -maxdepth 3 \( -name '*.gguf' -o -name '*.mmproj' \) -print0 2>/dev/null)
+        done < <(find "$dir" -maxdepth 5 \( -name '*.gguf' -o -name '*.mmproj' \) -print0 2>/dev/null)
     done
 
     if [[ $count -eq 0 && $skipped -gt 0 ]]; then
@@ -608,6 +608,19 @@ do_install() {
     done
 
     log_ok "Installed to ${INSTALL_DIR}/"
+
+    # Add INSTALL_DIR to PATH if not already present
+    local shell_configs=("${HOME}/.bashrc" "${HOME}/.zshrc")
+    local path_line='export PATH="${HOME}/.bin:$PATH"'
+    for config in "${shell_configs[@]}"; do
+        if [[ -f "$config" ]] && ! grep -qF '~/.bin' "$config" 2>/dev/null && ! grep -qF "$INSTALL_DIR" "$config" 2>/dev/null; then
+            echo "" >> "$config"
+            echo "# Added by llama.cpp install.sh" >> "$config"
+            echo "$path_line" >> "$config"
+            log_info "Added ~/.bin to PATH in ${config}"
+        fi
+    done
+    export PATH="${INSTALL_DIR}:$PATH"
 }
 
 do_models() {
