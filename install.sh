@@ -582,23 +582,6 @@ do_configure() {
     fi
 
     # Backend-specific flags
-    if [[ -z "$BACKEND" ]]; then
-        BACKEND="$(detect_backend)"
-        log_info "Auto-detected backend: ${BACKEND}"
-    fi
-
-    local -a cmake_opts=(
-        -B "$build_subdir"
-        -S "$REPO_DIR"
-        "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
-        -DLLAMA_OPENSSL=ON
-        -DLLAMA_BUILD_TESTS=OFF
-        -DLLAMA_BUILD_EXAMPLES=ON
-        -DLLAMA_BUILD_SERVER=ON
-        -DLLAMA_NATIVE=ON
-    )
-
-    # Backend-specific flags
     case "$BACKEND" in
         cuda)
             cmake_opts+=(
@@ -652,14 +635,25 @@ do_configure() {
 
     log_info "Configuring (backend=${BACKEND}, type=${BUILD_TYPE})..."
     cmake "${cmake_opts[@]}"
+
+    # Persist config hash for incremental builds
+    echo "$opts_hash" > "${build_subdir}/.llama_install_config"
+
     log_ok "Configuration complete."
 }
 
 do_build() {
     local build_subdir="${BUILD_DIR}/build"
 
-    log_info "Building with ${JOBS} parallel jobs..."
-    cmake --build "$build_subdir" --config "$BUILD_TYPE" -j "$JOBS"
+    # Auto-detect jobs if not explicitly set
+    local jobs=$JOBS
+    if [[ $jobs -eq 0 ]]; then
+        jobs=$(auto_detect_jobs)
+        log_info "Auto-detected ${jobs} parallel jobs"
+    fi
+
+    log_info "Building with ${jobs} parallel jobs..."
+    cmake --build "$build_subdir" --config "$BUILD_TYPE" -j "$jobs"
     log_ok "Build complete."
 }
 
