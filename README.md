@@ -18,7 +18,7 @@ LLM inference in C/C++
 > Clone the repo, build, install, and generate model presets — all in one command.
 
 ```bash
-bash -c 'git clone --depth 1 --recurse-submodules https://github.sec.samsung.net/aman-walia/llama.cpp && cd llama.cpp && ./install.sh'
+bash -c 'git clone --depth 1 --recurse-submodules https://github.sec.samsung.net/aman-walia/llama.cpp && cd llama.cpp && chmod +x ./install.sh && ./install.sh'
 ```
 
 Auto-detects your GPU backend (CUDA / Metal / Vulkan / CPU) and installs `llama-server`, `llama-cli`, and `llama-quantize` to `~/.bin/`.
