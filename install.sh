@@ -58,7 +58,7 @@ REPO_BRANCH="master"
 BACKEND=""          # empty = auto-detect
 BUILD_TYPE="Release"
 JOBS=0              # 0 = auto-detect CPU cores (capped at 32)
-MODELS_SOURCE=""
+MODELS_SOURCE="/netapp/output/aman.walia/share/models"
 SKIP_CLONE=false
 SKIP_BUILD=false
 CLEAN_BUILD=false
@@ -355,12 +355,15 @@ detect_backend() {
 }
 
 # Copy models from source directories to MODELS_DIR
-# Handles deduplication by filename
+# Uses rsync for robust copying with progress, retries, and verification.
+# Falls back to cp if rsync is unavailable.
+# Verifies file sizes after copy to catch partial transfers.
 copy_models() {
     local IFS=','
     local dirs=($1)
     local count=0
     local skipped=0
+    local failed=0
 
     mkdir -p "$MODELS_DIR"
 
@@ -375,26 +378,79 @@ copy_models() {
             local dest_parent
             dest_parent="$(dirname "$dest_file")"
 
+            local src_size
+            src_size=$(stat -c%s "$src_file" 2>/dev/null || stat -f%z "$src_file" 2>/dev/null || echo -1)
+
             if [[ -f "$dest_file" ]]; then
-                # Check if files are identical (by inode or checksum)
-                if cmp -s "$src_file" "$dest_file"; then
+                # Quick size check first — avoids expensive cmp on network mounts
+                local dest_size
+                dest_size=$(stat -c%s "$dest_file" 2>/dev/null || stat -f%z "$dest_file" 2>/dev/null || echo -1)
+
+                if [[ "$src_size" == "$dest_size" && "$src_size" != "-1" ]]; then
                     skipped=$((skipped + 1))
                     continue
                 fi
-                log_warn "Overwriting existing model: $rel_path"
+                log_warn "Overwriting existing model (size mismatch): $rel_path"
             fi
 
             mkdir -p "$dest_parent"
-            cp -f "$src_file" "$dest_file"
-            count=$((count + 1))
-            log_info "Copied: $rel_path"
-        done < <(find "$dir" -maxdepth 5 \( -name '*.gguf' -o -name '*.mmproj' \) -print0 2>/dev/null)
+
+            local src_size_after dest_size_after
+            local copy_ok=false
+
+            local human_size
+            human_size=$(numfmt --to=iec "$src_size" 2>/dev/null || echo "...")
+
+            if command -v rsync >/dev/null 2>&1; then
+                # rsync: robust for large files over network mounts, shows progress
+                # Use --size-only (not --checksum) to avoid full checksum computation on multi-GB files
+                log_info "Copying: $rel_path ($human_size)..."
+                if rsync -a --size-only --progress "$src_file" "$dest_file"; then
+                    copy_ok=true
+                fi
+            fi
+
+            if [[ "$copy_ok" != true ]]; then
+                # Fallback to cp with verification
+                if command -v rsync >/dev/null 2>&1; then
+                    log_warn "rsync failed for $rel_path, falling back to cp"
+                else
+                    log_info "Copying: $rel_path ($human_size)..."
+                fi
+                if cp -f "$src_file" "$dest_file"; then
+                    copy_ok=true
+                fi
+            fi
+
+            if [[ "$copy_ok" == true ]]; then
+                # Verify the copy completed fully by comparing sizes
+                src_size_after=$(stat -c%s "$src_file" 2>/dev/null || stat -f%z "$src_file" 2>/dev/null || echo -1)
+                dest_size_after=$(stat -c%s "$dest_file" 2>/dev/null || stat -f%z "$dest_file" 2>/dev/null || echo -1)
+
+                if [[ "$src_size_after" == "$dest_size_after" && "$dest_size_after" != "-1" && "$dest_size_after" != "0" ]]; then
+                    count=$((count + 1))
+                    log_ok "Copied: $rel_path"
+                else
+                    log_error "Copy verification failed: $rel_path (src=${src_size_after}, dst=${dest_size_after})"
+                    rm -f "$dest_file"  # Remove partial file
+                    failed=$((failed + 1))
+                fi
+            else
+                log_error "Copy failed: $rel_path"
+                failed=$((failed + 1))
+            fi
+        done < <(find "$dir" -maxdepth 5 \( -name '*.gguf' -o -name '*.mmproj' \) -print0)
     done
 
-    if [[ $count -eq 0 && $skipped -gt 0 ]]; then
-        log_ok "All $skipped model(s) already up to date."
-    elif [[ $count -gt 0 ]]; then
+    if [[ $count -gt 0 ]]; then
         log_ok "Copied $count model file(s) ($skipped skipped)."
+    fi
+    if [[ $skipped -gt 0 && $count -eq 0 ]]; then
+        log_ok "All $skipped model(s) already up to date."
+    fi
+    if [[ $failed -gt 0 ]]; then
+        log_error "$failed model copy(s) failed. Check disk space and network connectivity."
+        return 1
     fi
 }
 
@@ -716,6 +772,25 @@ do_models() {
         log_warn "No --models-source specified. Skipping model copy."
         log_info "To add models later, run:"
         log_info "  $0 --models-source /path/to/models --skip-clone"
+        return
+    fi
+
+    # Check if any of the source directories actually exist
+    local IFS=','
+    local dirs=($MODELS_SOURCE)
+    local found=false
+    for dir in "${dirs[@]}"; do
+        dir="$(echo "$dir" | xargs)"
+        if [[ -d "$dir" ]]; then
+            found=true
+            break
+        fi
+    done
+
+    if [[ "$found" != true ]]; then
+        log_warn "Models source directory not found: ${MODELS_SOURCE}"
+        log_info "To add models later, run:"
+        log_info "  $0 --models-source /path/to/models --skip-build"
         return
     fi
 
