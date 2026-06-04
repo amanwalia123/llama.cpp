@@ -557,6 +557,8 @@ prompt_start_server() {
 
     local server_cmd="export PATH=\"$bin_dir:\$PATH\" && llama-server --models-preset $LLAMA_MODELS_INI --host 0.0.0.0 --port 11435 --jinja --n-gpu-layers all --flash-attn on --split-mode layer --tensor-split 1,1 --parallel 4 --slots --ctx-size 200000 --batch-size 4096 --ubatch-size 1024 --cache-type-k q8_0 --cache-type-v q8_0 --reasoning on --tools all --models-max 1"
 
+    local port=11435
+
     if [[ "$multiplexer" == "tmux" ]]; then
         tmux new-session -d -s llama-server "$server_cmd"
         log_ok "llama-server started in tmux session 'llama-server'."
@@ -567,7 +569,21 @@ prompt_start_server() {
         log_info "Attach with: screen -r llama-server"
     fi
 
-    log_info "Server listening on http://0.0.0.0:11435"
+    local machine_ip
+    machine_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')
+
+    echo ""
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║              llama-server is running                 ║"
+    echo "╠══════════════════════════════════════════════════════╣"
+    echo "║  Host:          ${machine_ip}:${port}"
+    echo "║  WebUI:         http://${machine_ip}:${port}"
+    echo "║  API endpoint:  http://${machine_ip}:${port}/v1/chat/completions"
+    echo "╠══════════════════════════════════════════════════════╣"
+    echo "║  Use in other tools as OpenAI-compatible base URL:"
+    echo "║    http://${machine_ip}:${port}/v1"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo ""
 }
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
