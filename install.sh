@@ -14,7 +14,7 @@
 #   --build-type <Release|Debug|RelWithDebInfo>
 #       CMake build type (default: Release)
 #   --jobs <N>
-#       Parallel build jobs (default: 128)
+#       Parallel build jobs (default: auto-detect CPU cores, capped at 32)
 #   --models-source <dir1>,<dir2>,...
 #       Comma-separated list of directories to scan for .gguf models.
 #       Models are copied to ~/.llama/models/ for fast local loading.
@@ -33,6 +33,8 @@
 #   --skip-build
 #       Skip the build step (clone, configure, build, install). Useful for
 #       re-generating models.ini after adding new models.
+#   --clean
+#       Force a clean build by removing the build directory before configuring.
 #   --help
 #       Show this help message
 #
@@ -55,10 +57,11 @@ REPO_URL="https://github.sec.samsung.net/aman-walia/llama.cpp"
 REPO_BRANCH="master"
 BACKEND=""          # empty = auto-detect
 BUILD_TYPE="Release"
-JOBS=128
+JOBS=0              # 0 = auto-detect CPU cores (capped at 32)
 MODELS_SOURCE=""
 SKIP_CLONE=false
 SKIP_BUILD=false
+CLEAN_BUILD=false
 
 # Detect if install.sh is being run from inside a llama.cpp checkout
 IN_REPO=false
@@ -82,6 +85,69 @@ show_help() {
 }
 
 die() { log_error "$@"; exit 1; }
+
+# Auto-detect parallel jobs based on CPU cores, capped at 32
+# to avoid I/O contention on most systems
+auto_detect_jobs() {
+    local cores=0
+    if command -v nproc >/dev/null 2>&1; then
+        cores=$(nproc)
+    elif command -v sysctl >/dev/null 2>&1 && sysctl -a 2>/dev/null | grep -q hw.ncpu; then
+        cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 0)
+    elif [[ -f /proc/cpuinfo ]]; then
+        cores=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 0)
+    fi
+
+    # Cap at 32 to avoid excessive I/O contention
+    if [[ $cores -gt 32 ]]; then
+        cores=32
+    fi
+
+    # Ensure at least 2 jobs
+    if [[ $cores -lt 2 ]]; then
+        cores=2
+    fi
+
+    echo "$cores"
+}
+
+# Compute a hash of the current build configuration
+compute_config_hash() {
+    local config="BACKEND=${BACKEND:-unset}"
+    config+="|BUILD_TYPE=${BUILD_TYPE}"
+    config+="|CMAKE_OPTS=${*:-}"
+    echo -n "$config" | md5sum 2>/dev/null | cut -d' ' -f1 || echo -n "$config" | cksum | cut -d' ' -f1
+}
+
+# Check if build directory needs to be cleaned due to config changes
+needs_clean() {
+    local build_subdir="$1"
+    local config_file="${build_subdir}/.llama_install_config"
+    local current_hash
+    current_hash=$(compute_config_hash "$@")
+
+    # If --clean is specified, always clean
+    if [[ "$CLEAN_BUILD" == true ]]; then
+        return 0
+    fi
+
+    # If config file doesn't exist, clean for first build
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+
+    # If hash changed, clean
+    local stored_hash
+    stored_hash=$(cat "$config_file" 2>/dev/null || echo "")
+    if [[ "$current_hash" != "$stored_hash" ]]; then
+        log_info "Build configuration changed — cleaning build directory"
+        return 0
+    fi
+
+    # No clean needed — incremental build is possible
+    log_info "Configuration unchanged — using incremental build"
+    return 1
+}
 
 # Detect and install missing build tools
 install_prerequisites() {
@@ -443,6 +509,8 @@ parse_args() {
                 SKIP_CLONE=true; shift ;;
             --skip-build)
                 SKIP_BUILD=true; shift ;;
+            --clean)
+                CLEAN_BUILD=true; shift ;;
             --help)
                 show_help ;;
             *)
@@ -485,9 +553,35 @@ do_clone() {
 do_configure() {
     local build_subdir="${BUILD_DIR}/build"
 
-    rm -rf "$build_subdir"
+    # Determine backend before computing config hash
+    if [[ -z "$BACKEND" ]]; then
+        BACKEND="$(detect_backend)"
+        log_info "Auto-detected backend: ${BACKEND}"
+    fi
 
-    # Determine backend
+    # Use incremental builds — only clean when configuration changes
+    mkdir -p "$build_subdir"
+
+    local -a cmake_opts=(
+        -B "$build_subdir"
+        -S "$REPO_DIR"
+        "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
+        -DLLAMA_OPENSSL=ON
+        -DLLAMA_BUILD_TESTS=OFF
+        -DLLAMA_BUILD_EXAMPLES=ON
+        -DLLAMA_BUILD_SERVER=ON
+        -DLLAMA_NATIVE=ON
+    )
+
+    # Compute hash with backend-specific options included
+    local opts_hash="${BACKEND}|${BUILD_TYPE}"
+
+    if needs_clean "$build_subdir" "$opts_hash"; then
+        rm -rf "$build_subdir"
+        mkdir -p "$build_subdir"
+    fi
+
+    # Backend-specific flags
     if [[ -z "$BACKEND" ]]; then
         BACKEND="$(detect_backend)"
         log_info "Auto-detected backend: ${BACKEND}"
