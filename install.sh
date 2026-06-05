@@ -457,14 +457,223 @@ copy_models() {
 # Generate models.ini from discovered models in MODELS_DIR
 #
 # INI format (parsed by common_preset_context::load_from_ini):
-#   - Keys are environment variable names (LLAMA_ARG_*, __PRESET_*), NOT CLI arg names
-#   - [*] section → global preset, cascaded into all other presets
-#   - [model_name] section → individual model preset
+#   - Keys are CLI arg names without dashes (e.g. "model", "n-gpu-layers"),
+#     short forms (e.g. "c"), or environment variable names (e.g. "LLAMA_ARG_*").
+#   - [*] section → global preset, cascaded into all other presets.
+#   - [model_name] section → individual model preset.
 #   - Boolean keys use truthy strings: "true", "on", "1", etc.
 #
-# Each model gets its own preset section named after the model file (without extension).
+# Each model gets its own preset section. Multimodal projector files (mmproj)
+# are paired with their companion model, not treated as standalone models.
+#
+# mmproj files may have either:
+#   - .mmproj extension  (e.g. model.mmproj)
+#   - .gguf extension with "mmproj" in the filename (e.g. mmproj-0001-of-00001.gguf)
+#
+# Sharded models are identified by the "-NNNNN-of-" pattern in the filename;
+# only the first shard (-00001-of-) is used as the model path.
+
+# ─── Helpers for model discovery ──────────────────────────────────────────────
+
+# Returns true if the filename belongs to an mmproj (multimodal projector) file.
+# Covers both .mmproj extension and .gguf files with "mmproj" in the name.
+is_mmproj_file() {
+    local fname
+    fname="$(basename "$1")"
+    case "$fname" in
+        *.mmproj)    return 0 ;;
+        mmproj*)    return 0 ;;
+        *mmproj*)    return 0 ;;
+        *mm-project*) return 0 ;;
+    esac
+    return 1
+}
+
+# Returns true if the filename is the first shard of a sharded model.
+is_first_shard() {
+    local fname
+    fname="$(basename "$1")"
+    case "$fname" in
+        *-00001-of-*) return 0 ;;
+    esac
+    return 1
+}
+
+# Returns true if the filename is a shard (any index) of a sharded model.
+is_shard() {
+    local fname
+    fname="$(basename "$1")"
+    case "$fname" in
+        *-[0-9][0-9][0-9][0-9][0-9]-of-*) return 0 ;;
+    esac
+    return 1
+}
+
+# Derive a unique preset name from a model file path.
+# Uses the parent directory name (relative to MODELS_DIR), cleaned and lowercased.
+# Falls back to filename-based naming for models in the root of MODELS_DIR.
+model_preset_name() {
+    local model_path="$1"
+    local models_dir="$2"
+    local rel="${model_path#"$models_dir"/}"
+
+    local name
+    if [[ "$rel" == */* ]]; then
+        # Model is in a subdirectory — use the directory name
+        name="$(dirname "$rel")"
+    else
+        # Model is directly in MODELS_DIR — use the filename without extension
+        name="${rel%.gguf}"
+    fi
+
+    # Clean up: lowercase and remove common redundant tokens
+    name="$(echo "$name" | tr '[:upper:]' '[:lower:]')"
+    name="${name//-gguf/}"
+    name="${name//-it/}"
+    name="${name//-a3b-ud-/}"
+    # Replace remaining non-alphanumeric chars (except dot, hyphen, underscore) with underscore
+    name="$(echo "$name" | sed 's/[^a-z0-9._-]/_/g')"
+
+    echo "$name"
+}
+
+# Find a companion mmproj file for a given model path.
+# Looks for:
+#   1. Same directory, same base name + .mmproj
+#   2. Same directory, any .mmproj file
+#   3. Same directory, any .gguf file with "mmproj" in the name (or sharded mmproj)
+# Returns the path via stdout, or empty string if not found.
+find_mmproj() {
+    local model_dir
+    model_dir="$(dirname "$1")"
+    local model_base
+    model_base="$(basename "$1" .gguf)"
+
+    # 1. Exact match: model.gguf → model.mmproj
+    if [[ -f "${model_dir}/${model_base}.mmproj" ]]; then
+        echo "${model_dir}/${model_base}.mmproj"
+        return
+    fi
+
+    # 2. Sharded mmproj: mmproj-00001-of-NNNNN.gguf
+    local mmproj_shard
+    mmproj_shard=$(find "$model_dir" -maxdepth 1 -name 'mmproj-00001-of-*.gguf' -print -quit 2>/dev/null || true)
+    if [[ -n "$mmproj_shard" ]]; then
+        echo "$mmproj_shard"
+        return
+    fi
+
+    # 3. Any .mmproj file in the same directory
+    local any_mmproj
+    any_mmproj=$(find "$model_dir" -maxdepth 1 -name '*.mmproj' -not -name '*.mmproj.*' -print -quit 2>/dev/null || true)
+    if [[ -n "$any_mmproj" ]]; then
+        echo "$any_mmproj"
+        return
+    fi
+
+    # 4. Any .gguf file with "mmproj" in the name
+    local any_mmproj_gguf
+    any_mmproj_gguf=$(find "$model_dir" -maxdepth 1 -name '*mmproj*.gguf' -print -quit 2>/dev/null || true)
+    if [[ -n "$any_mmproj_gguf" ]]; then
+        echo "$any_mmproj_gguf"
+        return
+    fi
+}
+
+# Discover models in a directory and emit INI preset sections.
+# Arguments: <scan_dir> <maxdepth>
+# Prints preset sections to stdout.
+# Skips:
+#   - mmproj files (handled as companions, not standalone models)
+#   - Non-first shards (e.g. model-00002-of-00005.gguf)
+#   - Partial/incomplete downloads (*.gguf.* patterns)
+scan_models_dir() {
+    local scan_dir="$1"
+    local maxdepth="${2:-3}"
+
+    while IFS= read -r -d '' gguf_file; do
+        local fname
+        fname="$(basename "$gguf_file")"
+
+        if is_mmproj_file "$gguf_file"; then
+            continue
+        fi
+        if [[ "$fname" != *.gguf ]]; then
+            continue
+        fi
+        if [[ "$fname" == *.gguf.* ]]; then
+            continue
+        fi
+        # Skip shards that are NOT the first shard
+        if is_shard "$gguf_file" && ! is_first_shard "$gguf_file"; then
+            continue
+        fi
+
+        local preset_name
+        preset_name="$(model_preset_name "$gguf_file" "$MODELS_DIR")"
+
+        echo ""
+        echo "[$preset_name]"
+        echo "model = $gguf_file"
+
+        # Check for a companion mmproj file
+        local mmproj_path
+        mmproj_path="$(find_mmproj "$gguf_file")"
+        if [[ -n "$mmproj_path" ]]; then
+            echo "mmproj = $mmproj_path"
+        fi
+
+    done < <(find "$scan_dir" -maxdepth "$maxdepth" -name '*.gguf' -not -name '*.gguf.*' -print0 2>/dev/null | sort -z)
+}
+
+# Discover models in the HF cache and emit INI preset sections.
+# Limits to 50 models to avoid bloated presets.
+scan_hf_cache() {
+    local hf_cache="${HOME}/.cache/huggingface/hub"
+    local count=0
+
+    while IFS= read -r -d '' gguf_file; do
+        [[ $count -ge 50 ]] && break
+
+        local fname
+        fname="$(basename "$gguf_file")"
+
+        # Skip mmproj files
+        if is_mmproj_file "$gguf_file"; then
+            continue
+        fi
+
+        # Skip non-first shards
+        if is_shard "$gguf_file" && ! is_first_shard "$gguf_file"; then
+            continue
+        fi
+
+        local preset_name
+        # Use parent directory name + base name for uniqueness in flat HF cache
+        preset_name="$(basename "$(dirname "$gguf_file")")_$(basename "$gguf_file" .gguf)"
+        preset_name="${preset_name//[^a-zA-Z0-9_.-]/_}"
+
+        echo ""
+        echo "[$preset_name]"
+        echo "model = $gguf_file"
+
+        # Check for companion mmproj
+        local mmproj_path
+        mmproj_path="$(find_mmproj "$gguf_file")"
+        if [[ -n "$mmproj_path" ]]; then
+            echo "mmproj = $mmproj_path"
+        fi
+
+        count=$((count + 1))
+    done < <(find "$hf_cache" -maxdepth 6 -name '*.gguf' -not -name '*.gguf.*' -print0 2>/dev/null | sort -z)
+
+    echo "$count"
+}
+
 generate_models_ini() {
     mkdir -p "$(dirname "$LLAMA_MODELS_INI")"
+
+    local model_count=0
 
     {
         echo "version = 1"
@@ -472,44 +681,40 @@ generate_models_ini() {
         echo "[*]"
         echo "jinja = true"
 
-        local model_count=0
-
+        # Scan primary models directory
         if [[ -d "$MODELS_DIR" ]]; then
-            while IFS= read -r -d '' model_path; do
-                local model_name
-                model_name="$(basename "$model_path" .gguf)"
-
-                echo ""
-                echo "[$model_name]"
-                echo "model = $model_path"
-
-                # Check for a companion .mmproj file (multimodal projector)
-                if [[ -f "${model_path%.gguf}.mmproj" ]]; then
-                    echo "mmproj = ${model_path%.gguf}.mmproj"
-                fi
-
-                model_count=$((model_count + 1))
-            done < <(find "$MODELS_DIR" -maxdepth 3 -name '*.gguf' -not -name '*.gguf.*' -print0 2>/dev/null | sort -z)
+            scan_models_dir "$MODELS_DIR" 3
         fi
 
-        # Also check HF cache directory as fallback
+        # Fallback: scan HF cache if no models found in MODELS_DIR
+        # (We need a separate pass because we can't easily count from the subshell)
         local hf_cache="${HOME}/.cache/huggingface/hub"
-        if [[ -d "$hf_cache" && $model_count -eq 0 ]]; then
-            log_warn "No models found in ${MODELS_DIR}. Scanning HF cache..."
-            while IFS= read -r -d '' model_path; do
-                local model_name
-                model_name="$(basename "$(dirname "$model_path")")_$(basename "$model_path" .gguf)"
-                model_name="${model_name//[^a-zA-Z0-9_.-]/_}"
+        if [[ -d "$hf_cache" ]]; then
+            # Only use HF cache if MODELS_DIR had no models (checked by re-scanning)
+            local primary_count=0
+            while IFS= read -r -d '' gguf_file; do
+                local fname
+                fname="$(basename "$gguf_file")"
+                is_mmproj_file "$gguf_file" && continue
+                is_shard "$gguf_file" && ! is_first_shard "$gguf_file" && continue
+                primary_count=$((primary_count + 1))
+            done < <(find "$MODELS_DIR" -maxdepth 3 -name '*.gguf' -not -name '*.gguf.*' -print0 2>/dev/null)
 
-                echo ""
-                echo "[$model_name]"
-                echo "model = $model_path"
-
-                model_count=$((model_count + 1))
-            done < <(find "$hf_cache" -maxdepth 6 -name '*.gguf' -not -name '*.gguf.*' -print0 2>/dev/null | sort -z | { local n=0; while IFS= read -r -d '' line && [[ $n -lt 50 ]]; do printf '%s\0' "$line"; n=$((n+1)); done; })
+            if [[ $primary_count -eq 0 ]]; then
+                log_warn "No models found in ${MODELS_DIR}. Scanning HF cache..."
+                # scan_hf_cache outputs preset sections then a count on the last line;
+                # tail -n -2 discards that trailing count so it doesn't leak into the INI
+                scan_hf_cache | tail -n -2
+                model_count=$(scan_hf_cache | tail -n1)
+            fi
         fi
 
     } > "$LLAMA_MODELS_INI"
+
+    # Count actual presets (non-empty sections excluding [*])
+    model_count=$(grep -c '^\[' "$LLAMA_MODELS_INI" 2>/dev/null || echo 0)
+    model_count=$((model_count - 1))  # subtract [*] global section
+    [[ $model_count -lt 0 ]] && model_count=0
 
     log_ok "Generated ${LLAMA_MODELS_INI} with $model_count model preset(s)."
 }
