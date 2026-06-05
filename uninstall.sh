@@ -73,7 +73,7 @@ fi
 if [[ -d "$INSTALL_DIR" ]]; then
     log_info "Removing binaries from $INSTALL_DIR..."
     # Only remove the specific binaries installed by install.sh to avoid nuking the whole .bin folder
-    for bin in llama-server llama-cli llama-quantize; do
+    for bin in llama-server llama-cli llama-quantize llama-ctl; do
         if [[ -L "${INSTALL_DIR}/${bin}" ]]; then
             rm "${INSTALL_DIR}/${bin}"
             log_ok "Removed symlink: ${bin}"

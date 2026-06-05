@@ -987,6 +987,16 @@ do_install() {
         fi
     done
 
+    # Install llama-ctl (lifecycle helper for the server) from the repo root
+    if [[ -n "${REPO_DIR:-}" && -f "${REPO_DIR}/llama-ctl" ]]; then
+        local ctl_src="${REPO_DIR}/llama-ctl"
+        local ctl_dest="${INSTALL_DIR}/llama-ctl"
+        chmod +x "$ctl_src"
+        rm -f "$ctl_dest"
+        ln -sf "$ctl_src" "$ctl_dest"
+        log_info "Linked: llama-ctl → ${ctl_dest}"
+    fi
+
     # Copy shared libraries so symlinks resolve correctly
     # Linux uses .so, macOS uses .dylib
     local lib_ext="so"
@@ -1095,7 +1105,14 @@ main() {
     echo "║  Models:     ${MODELS_DIR}/"
     echo "║  Presets:    ${LLAMA_MODELS_INI}"
     echo "╠══════════════════════════════════════════════════════╣"
-    echo "║  Start server:"
+    echo "║  Manage the server (recommended):"
+    echo "║    llama-ctl start     # background tmux/screen session"
+    echo "║    llama-ctl status    # is it running?"
+    echo "║    llama-ctl logs      # attach to live logs"
+    echo "║    llama-ctl stop      # kill the session"
+    echo "║    llama-ctl url       # print WebUI / OpenAI-compat URL"
+    echo "║"
+    echo "║  Or run llama-server directly:"
     echo "║    llama-server --models-preset ${LLAMA_MODELS_INI}"
     echo "║"
     echo "║  Interactive CLI:"
