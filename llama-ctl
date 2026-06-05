@@ -123,7 +123,9 @@ cmd_webui_start() {
 
     if [[ "$mux" == tmux ]]; then
         if tmux has-session -t "$SESSION" 2>/dev/null; then
-            tmux new-window -t "$SESSION":OpenWebUI -d "$cmd"
+            # Kill stale window first so re-runs don't hit "index N in use"
+            tmux kill-window -t "${SESSION}:OpenWebUI" 2>/dev/null || true
+            tmux new-window -t "${SESSION}:" -d -n OpenWebUI "$cmd"
         else
             log "Tmux session '$SESSION' not found. Creating it..."
             tmux new-session -d -s "$SESSION" -n OpenWebUI "$cmd"
@@ -186,12 +188,12 @@ cmd_start() {
 
     local cmd="$bin $(server_args)"
     if [[ "$mux" == tmux ]]; then
-        tmux new-session -d -s "$SESSION" "$cmd"
+        tmux new-session -d -s "$SESSION" -n llama-server "$cmd"
     else
         screen -dmS "$SESSION" bash -c "$cmd"
     fi
-    ok "Started llama-server in $mux session '$SESSION'"
-    cmd_url
+    ok "Started llama-server in $mux session '$SESSION' (window: llama-server)"
+    cmd_webui_start
 }
 
 cmd_stop() {
