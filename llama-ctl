@@ -77,7 +77,7 @@ cmd_url() {
     echo ""
     echo "  Llama Server:  http://${ip}:${PORT}"
     echo "  OpenAI API:    http://${ip}:${PORT}/v1"
-    echo "  Open WebUI:    http://${ip}:3000"
+    echo "  Open WebUI:    http://${ip}:3001"
     echo ""
 }
 
@@ -118,8 +118,8 @@ cmd_webui_start() {
     local mux; mux="$(detect_mux)" || { err "Neither tmux nor screen installed."; exit 1; }
     local uvx; uvx="$(ensure_uvx)"
 
-    # Command to serve Open WebUI on port 3000, host 0.0.0.0
-    local cmd="DATA_DIR=${HOME}/.open-webui $uvx --python 3.11 open-webui@latest serve --port 3000 --host 0.0.0.0"
+    # Command to serve Open WebUI on port 3001, host 0.0.0.0
+    local cmd="DATA_DIR=${HOME}/.open-webui $uvx --python 3.11 open-webui@latest serve --port 3001 --host 0.0.0.0"
 
     if [[ "$mux" == tmux ]]; then
         if tmux has-session -t "$SESSION" 2>/dev/null; then
