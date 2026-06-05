@@ -72,6 +72,15 @@ is_running() {
     fi
 }
 
+cmd_url() {
+    local ip; ip="$(machine_ip)"
+    echo ""
+    echo "  Llama Server:  http://${ip}:${PORT}"
+    echo "  OpenAI API:    http://${ip}:${PORT}/v1"
+    echo "  Open WebUI:    http://${ip}:3000"
+    echo ""
+}
+
 ensure_uvx() {
     if command -v uvx >/dev/null 2>&1; then
         command -v uvx
@@ -311,10 +320,13 @@ case "${1:-help}" in
     status)           cmd_status ;;
     logs|attach)      cmd_logs ;;
     url)              cmd_url ;;
-    webui start)     cmd_webui_start ;;
-    webui stop)      cmd_webui_stop ;;
-    webui restart)   cmd_webui_restart ;;
-    webui status)    cmd_webui_status ;;
+    webui)            case "${2:-help}" in
+                        start)     cmd_webui_start ;;
+                        stop)      cmd_webui_stop ;;
+                        restart)   cmd_webui_restart ;;
+                        status)    cmd_webui_status ;;
+                        *)         err "Unknown webui command: $2"; cmd_help ;;
+                      esac ;;
     help|-h|--help)  cmd_help ;;
     uninstall)        cmd_uninstall "$@" ;;
     *)                err "Unknown command: $1"; cmd_help ;;
