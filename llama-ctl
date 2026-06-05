@@ -72,12 +72,97 @@ is_running() {
     fi
 }
 
-cmd_url() {
-    local ip; ip="$(machine_ip)"
-    echo ""
-    echo "  WebUI:    http://${ip}:${PORT}"
-    echo "  OpenAI:   http://${ip}:${PORT}/v1"
-    echo ""
+ensure_uvx() {
+    if command -v uvx >/dev/null 2>&1; then
+        command -v uvx
+        return
+    fi
+    if [[ -x "${HOME}/.local/bin/uvx" ]]; then
+        echo "${HOME}/.local/bin/uvx"
+        return
+    fi
+
+    read -rp "uvx not found. Install uv (provides uvx)? [y/N] " answer
+    case "$answer" in
+        [yY][eE][sS]|[yY]) ;;
+        *) err "uvx is required. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1 ;;
+    esac
+
+    log "Installing uv..."
+    if curl -LsSf https://astral.sh/uv/install.sh | sh; then
+        local bin="${HOME}/.local/bin/uvx"
+        if [[ -x "$bin" ]]; then
+            echo "$bin"
+            return
+        fi
+        if command -v uvx >/dev/null 2>&1; then
+            command -v uvx
+            return
+        fi
+    fi
+
+    err "Failed to install uv. Try: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+}
+
+cmd_webui_start() {
+    local mux; mux="$(detect_mux)" || { err "Neither tmux nor screen installed."; exit 1; }
+    local uvx; uvx="$(ensure_uvx)"
+
+    if is_running "$mux"; then
+        warn "Llama server is already running."
+    fi
+
+    # Command to serve Open WebUI on port 3000, host 0.0.0.0
+    local cmd="DATA_DIR=~/.open-webui $uvx --python 3.11 open-webui@latest serve --port 3000 --host 0.0.0.0"
+
+    if [[ "$mux" == tmux ]]; then
+        # Create a new window named 'OpenWebUI' inside the existing llama-server session
+        tmux new-window -t "$SESSION":OpenWebUI -d "$cmd"
+    else
+        # Screen fallback: use a distinct session name since it doesn't support windows the same way
+        screen -dmS "llama-server-OpenWebUI" bash -c "$cmd"
+    fi
+
+    ok "Started Open WebUI in $mux session/window (named 'OpenWebUI')"
+    cmd_url
+}
+
+cmd_webui_stop() {
+    local mux; mux="$(detect_mux)" || { err "Neither tmux nor screen installed."; exit 1; }
+
+    if [[ "$mux" == tmux ]]; then
+        # Kill only the OpenWebUI window
+        tmux kill-window -t "$SESSION":OpenWebUI 2>/dev/null || warn "OpenWebUI window not found."
+    else
+        screen -S "llama-server-OpenWebUI" -X quit 2>/dev/null || warn "OpenWebUI session not found."
+    fi
+    ok "Stopped Open WebUI"
+}
+
+cmd_webui_status() {
+    local mux; mux="$(detect_mux)" || { err "Neither tmux nor screen installed."; exit 1; }
+
+    if [[ "$mux" == tmux ]]; then
+        if tmux has-window -t "$SESSION":OpenWebUI 2>/dev/null; then
+            ok "Open WebUI is running (tmux window: OpenWebUI)"
+        else
+            warn "Open WebUI is not running."
+            exit 1
+        fi
+    else
+        if screen -ls 2>/dev/null | grep -q "\.llama-server-OpenWebUI\b"; then
+            ok "Open WebUI is running (screen session: llama-server-OpenWebUI)"
+        else
+            warn "Open WebUI is not running."
+            exit 1
+        fi
+    fi
+}
+
+cmd_webui_restart() {
+    cmd_webui_stop || true
+    cmd_webui_start
 }
 
 cmd_start() {
@@ -226,7 +311,11 @@ case "${1:-help}" in
     status)           cmd_status ;;
     logs|attach)      cmd_logs ;;
     url)              cmd_url ;;
-    help|-h|--help)   cmd_help ;;
+    webui start)     cmd_webui_start ;;
+    webui stop)      cmd_webui_stop ;;
+    webui restart)   cmd_webui_restart ;;
+    webui status)    cmd_webui_status ;;
+    help|-h|--help)  cmd_help ;;
     uninstall)        cmd_uninstall "$@" ;;
     *)                err "Unknown command: $1"; cmd_help ;;
 esac
