@@ -118,18 +118,17 @@ cmd_webui_start() {
     local mux; mux="$(detect_mux)" || { err "Neither tmux nor screen installed."; exit 1; }
     local uvx; uvx="$(ensure_uvx)"
 
-    if is_running "$mux"; then
-        warn "Llama server is already running."
-    fi
-
     # Command to serve Open WebUI on port 3000, host 0.0.0.0
-    local cmd="DATA_DIR=~/.open-webui $uvx --python 3.11 open-webui@latest serve --port 3000 --host 0.0.0.0"
+    local cmd="DATA_DIR=${HOME}/.open-webui $uvx --python 3.11 open-webui@latest serve --port 3000 --host 0.0.0.0"
 
     if [[ "$mux" == tmux ]]; then
-        # Create a new window named 'OpenWebUI' inside the existing llama-server session
-        tmux new-window -t "$SESSION":OpenWebUI -d "$cmd"
+        if tmux has-session -t "$SESSION" 2>/dev/null; then
+            tmux new-window -t "$SESSION":OpenWebUI -d "$cmd"
+        else
+            log "Tmux session '$SESSION' not found. Creating it..."
+            tmux new-session -d -s "$SESSION" -n OpenWebUI "$cmd"
+        fi
     else
-        # Screen fallback: use a distinct session name since it doesn't support windows the same way
         screen -dmS "llama-server-OpenWebUI" bash -c "$cmd"
     fi
 
