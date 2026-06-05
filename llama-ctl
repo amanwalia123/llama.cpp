@@ -9,6 +9,7 @@
 #   llama-ctl status             Show whether the server is running
 #   llama-ctl logs               Attach to the session (live logs)
 #   llama-ctl url                Print the WebUI / OpenAI-compat URL
+#   llama-ctl uninstall          Remove all llama.cpp installation artifacts
 #   llama-ctl --help             Show this help
 #
 # Environment overrides:
@@ -140,6 +141,79 @@ cmd_logs() {
     fi
 }
 
+cmd_uninstall() {
+    local install_dir="${HOME}/.bin"
+    local models_dir="${HOME}/.llama/models"
+    local build_dir="${HOME}/.llama/build"
+    local models_ini="${HOME}/.llama/models.ini"
+    local force=false
+
+    # Parse optional flags
+    for arg in "$@"; do
+        case "$arg" in
+            --force) force=true ;;
+        esac
+    done
+
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║           llama.cpp Uninstall Utility               ║"
+    echo "╠══════════════════════════════════════════════════════╣"
+    echo "║  Binaries dir:  $install_dir"
+    echo "║  Models dir:    $models_dir"
+    echo "║  Build dir:     $build_dir"
+    echo "║  Presets file:  $models_ini"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo ""
+
+    if [[ "$force" == false ]]; then
+        read -rp "This will permanently delete the above directories and files. Continue? [y/N] " answer
+        case "$answer" in
+            [yY][eE][sS]|[yY]) ;;
+            *) log "Uninstall cancelled."; exit 0 ;;
+        esac
+    fi
+
+    # 1. Remove Binaries
+    if [[ -d "$install_dir" ]]; then
+        log "Removing binaries from $install_dir..."
+        for bin in llama-server llama-cli llama-quantize llama-ctl; do
+            if [[ -L "${install_dir}/${bin}" ]]; then
+                rm "${install_dir}/${bin}"
+                ok "Removed symlink: ${bin}"
+            fi
+        done
+    else
+        warn "Installation directory $install_dir not found. Skipping."
+    fi
+
+    # 2. Remove Models and Presets
+    if [[ -f "$models_ini" ]]; then
+        log "Removing presets file: $models_ini"
+        rm "$models_ini"
+        ok "Deleted $models_ini"
+    fi
+
+    if [[ -d "$models_dir" ]]; then
+        log "Removing models directory: $models_dir"
+        rm -rf "$models_dir"
+        ok "Deleted $models_dir"
+    else
+        warn "Models directory $models_dir not found. Skipping."
+    fi
+
+    # 3. Remove Build Artifacts
+    if [[ -d "$build_dir" ]]; then
+        log "Removing build directory: $build_dir"
+        rm -rf "$build_dir"
+        ok "Deleted $build_dir"
+    else
+        warn "Build directory $build_dir not found. Skipping."
+    fi
+
+    echo ""
+    ok "Uninstallation complete. All llama.cpp artifacts have been removed."
+}
+
 cmd_help() {
     sed -n '3,/^$/s/^# \?//p' "$0"
     exit 0
@@ -153,5 +227,6 @@ case "${1:-help}" in
     logs|attach)      cmd_logs ;;
     url)              cmd_url ;;
     help|-h|--help)   cmd_help ;;
+    uninstall)        cmd_uninstall "$@" ;;
     *)                err "Unknown command: $1"; cmd_help ;;
 esac
