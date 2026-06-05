@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+#
+# llama-ctl - lifecycle manager for the local llama-server
+#
+# Usage:
+#   llama-ctl start              Start the server in a tmux/screen session
+#   llama-ctl stop               Kill the server session
+#   llama-ctl restart            Stop, then start
+#   llama-ctl status             Show whether the server is running
+#   llama-ctl logs               Attach to the session (live logs)
+#   llama-ctl url                Print the WebUI / OpenAI-compat URL
+#   llama-ctl --help             Show this help
+#
+# Environment overrides:
+#   LLAMA_CTL_PORT     Server port               (default: 11435)
+#   LLAMA_CTL_MODELS   Path to models.ini        (default: ~/.llama/models.ini)
+#   LLAMA_CTL_SESSION  tmux/screen session name  (default: llama-server)
+#
+# Auto-detects tmux (preferred) or screen. Installed alongside llama-server
+# in ~/.bin by install.sh.
+
+set -euo pipefail
+
+PORT="${LLAMA_CTL_PORT:-11435}"
+MODELS_INI="${LLAMA_CTL_MODELS:-${HOME}/.llama/models.ini}"
+SESSION="${LLAMA_CTL_SESSION:-llama-server}"
+
+C_INFO=$'\033[1;34m'; C_OK=$'\033[1;32m'; C_WARN=$'\033[1;33m'; C_ERR=$'\033[1;31m'; C_OFF=$'\033[0m'
+log()  { echo "${C_INFO}[llama-ctl]${C_OFF} $*" >&2; }
+ok()   { echo "${C_OK}[  ok  ]${C_OFF} $*" >&2; }
+warn() { echo "${C_WARN}[ warn ]${C_OFF} $*" >&2; }
+err()  { echo "${C_ERR}[error ]${C_OFF} $*" >&2; }
+
+find_server() {
+    if command -v llama-server >/dev/null 2>&1; then
+        command -v llama-server
+        return
+    fi
+    for cand in \
+        "${HOME}/.bin/llama-server" \
+        "${HOME}/.llama/build/build/bin/llama-server" \
+        "${HOME}/.llama/build/bin/llama-server"; do
+        [[ -x "$cand" ]] && { echo "$cand"; return; }
+    done
+    return 1
+}
+
+detect_mux() {
+    if command -v tmux   >/dev/null 2>&1; then echo tmux;   return; fi
+    if command -v screen >/dev/null 2>&1; then echo screen; return; fi
+    return 1
+}
+
+machine_ip() {
+    hostname -I 2>/dev/null | awk '{print $1}' || echo localhost
+}
+
+# Server launch args. Keep in sync with install.sh::prompt_start_server.
+server_args() {
+    cat <<EOF
+--models-preset $MODELS_INI --host 0.0.0.0 --port $PORT --jinja --n-gpu-layers all --flash-attn on --split-mode layer --tensor-split 1,1 --parallel 4 --slots --ctx-size 200000 --batch-size 4096 --ubatch-size 1024 --cache-type-k q8_0 --cache-type-v q8_0 --reasoning on --tools all --models-max 1
+EOF
+}
+
+is_running() {
+    local mux="$1"
+    if [[ "$mux" == tmux ]]; then
+        tmux has-session -t "$SESSION" 2>/dev/null
+    else
+        screen -ls 2>/dev/null | grep -q "\.${SESSION}\b"
+    fi
+}
+
+cmd_url() {
+    local ip; ip="$(machine_ip)"
+    echo ""
+    echo "  WebUI:    http://${ip}:${PORT}"
+    echo "  OpenAI:   http://${ip}:${PORT}/v1"
+    echo ""
+}
+
+cmd_start() {
+    local mux; mux="$(detect_mux)" || { err "Neither tmux nor screen installed."; exit 1; }
+    local bin; bin="$(find_server)" || { err "llama-server binary not found in PATH or ~/.bin/."; exit 1; }
+    [[ -f "$MODELS_INI" ]] || { err "Models preset not found: $MODELS_INI (re-run install.sh)"; exit 1; }
+
+    if is_running "$mux"; then
+        ok "Already running ($mux session: $SESSION)"
+        cmd_url
+        return
+    fi
+
+    local cmd="$bin $(server_args)"
+    if [[ "$mux" == tmux ]]; then
+        tmux new-session -d -s "$SESSION" "$cmd"
+    else
+        screen -dmS "$SESSION" bash -c "$cmd"
+    fi
+    ok "Started llama-server in $mux session '$SESSION'"
+    cmd_url
+}
+
+cmd_stop() {
+    local mux; mux="$(detect_mux)" || { err "Neither tmux nor screen installed."; exit 1; }
+    if ! is_running "$mux"; then
+        warn "Not running."
+        return
+    fi
+    if [[ "$mux" == tmux ]]; then
+        tmux kill-session -t "$SESSION"
+    else
+        screen -S "$SESSION" -X quit
+    fi
+    ok "Stopped session '$SESSION'"
+}
+
+cmd_status() {
+    local mux; mux="$(detect_mux)" || { err "Neither tmux nor screen installed."; exit 1; }
+    if is_running "$mux"; then
+        ok "Running ($mux session: $SESSION)"
+        cmd_url
+    else
+        warn "Not running."
+        exit 1
+    fi
+}
+
+cmd_logs() {
+    local mux; mux="$(detect_mux)" || { err "Neither tmux nor screen installed."; exit 1; }
+    if ! is_running "$mux"; then
+        err "Not running. Start it first: llama-ctl start"
+        exit 1
+    fi
+    if [[ "$mux" == tmux ]]; then
+        log "Detach with: Ctrl-b d  (Ctrl-C would kill the server)"
+        exec tmux attach -t "$SESSION"
+    else
+        log "Detach with: Ctrl-a d  (Ctrl-C would kill the server)"
+        exec screen -r "$SESSION"
+    fi
+}
+
+cmd_help() {
+    sed -n '3,/^$/s/^# \?//p' "$0"
+    exit 0
+}
+
+case "${1:-help}" in
+    start)            cmd_start ;;
+    stop)             cmd_stop ;;
+    restart)          cmd_stop || true; cmd_start ;;
+    status)           cmd_status ;;
+    logs|attach)      cmd_logs ;;
+    url)              cmd_url ;;
+    help|-h|--help)   cmd_help ;;
+    *)                err "Unknown command: $1"; cmd_help ;;
+esac
