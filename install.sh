@@ -760,7 +760,7 @@ prompt_start_server() {
         bin_dir="${HOME}/.llama/build/bin"
     fi
 
-    local server_cmd="export PATH=\"$bin_dir:\$PATH\" && llama-server --models-preset $LLAMA_MODELS_INI --host 0.0.0.0 --port 11435 --jinja --n-gpu-layers all --flash-attn on --split-mode layer --tensor-split 1,1 --parallel 4 --slots --ctx-size 200000 --batch-size 4096 --ubatch-size 1024 --cache-type-k q8_0 --cache-type-v q8_0 --reasoning on --tools all --models-max 1"
+    local server_cmd="export PATH=\"$bin_dir:\$PATH\" && llama-server --models-preset $LLAMA_MODELS_INI --host 0.0.0.0 --port 11435 --jinja --n-gpu-layers all --flash-attn on --split-mode layer --tensor-split 1,1 --parallel 1 --slots --ctx-size 200000 --batch-size 4096 --ubatch-size 1024 --cache-type-k q8_0 --cache-type-v q8_0 --reasoning on --tools all --spec-type draft-mtp --models-max 1"
 
     local port=11435
 
