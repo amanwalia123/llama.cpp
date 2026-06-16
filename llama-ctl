@@ -250,6 +250,16 @@ cmd_uninstall() {
         esac
     done
 
+
+    # Read tracked repo for display
+    local _tracked_repo=""
+    if [[ -f "${HOME}/.llama/install-state" ]]; then
+        _tracked_repo="$(cat "${HOME}/.llama/install-state")"
+        # Only show if outside ~/.llama/build
+        if [[ "$_tracked_repo" == "${HOME}/.llama/build"* ]]; then
+            _tracked_repo=""
+        fi
+    fi
     echo "╔══════════════════════════════════════════════════════╗"
     echo "║           llama.cpp Uninstall Utility               ║"
     echo "╠══════════════════════════════════════════════════════╣"
@@ -257,6 +267,9 @@ cmd_uninstall() {
     echo "║  Models dir:    $models_dir"
     echo "║  Build dir:     $build_dir"
     echo "║  Presets file:  $models_ini"
+    if [[ -n "$_tracked_repo" ]]; then
+        echo "║  Repo dir:    $_tracked_repo"
+    fi
     echo "╚══════════════════════════════════════════════════════╝"
     echo ""
 
@@ -303,6 +316,39 @@ cmd_uninstall() {
         ok "Deleted $build_dir"
     else
         warn "Build directory $build_dir not found. Skipping."
+    fi
+
+    # 4. Remove tracked repo directory (if outside ~/.llama/build)
+    local state_file="${HOME}/.llama/install-state"
+    if [[ -f "$state_file" ]]; then
+        local tracked_repo
+        tracked_repo="$(cat "$state_file")"
+
+        # Skip if repo is under ~/.llama/build (already removed in step 3)
+        if [[ "$tracked_repo" != "${HOME}/.llama/build"* ]]; then
+            if [[ -d "$tracked_repo" ]]; then
+                if [[ "$force" == true ]]; then
+                    log "Removing tracked repo: $tracked_repo"
+                    rm -rf "$tracked_repo"
+                    ok "Deleted $tracked_repo"
+                else
+                    read -rp "Remove tracked repo at $tracked_repo? [y/N] " answer
+                    case "$answer" in
+                        [yY][eE][sS]|[yY])
+                            log "Removing tracked repo: $tracked_repo"
+                            rm -rf "$tracked_repo"
+                            ok "Deleted $tracked_repo"
+                            ;;
+                        *) warn "Skipping tracked repo." ;;
+                    esac
+                fi
+            else
+                warn "Tracked repo $tracked_repo not found. Skipping."
+            fi
+        fi
+
+        # Remove state file
+        rm -f "$state_file"
     fi
 
     echo ""

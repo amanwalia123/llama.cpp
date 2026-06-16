@@ -1090,6 +1090,12 @@ main() {
         do_install
     fi
 
+    # Save install state for uninstall cleanup
+    if [[ -n "$REPO_DIR" ]]; then
+        mkdir -p "${HOME}/.llama"
+        echo "$REPO_DIR" > "${HOME}/.llama/install-state"
+    fi
+
     echo ""
     do_models
 
