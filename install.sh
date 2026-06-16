@@ -509,6 +509,38 @@ is_shard() {
     return 1
 }
 
+# Returns true if a GGUF file contains MTP (Multi-Token Prediction) tensors.
+# MTP models have dedicated draft heads with tensor names like:
+#   output_mtp.weight, blk.N.mtp_attn_q.weight, blk.N.mtp_attn_k.weight, blk.N.mtp_ffn_gate.weight
+# Detected by scanning for "mtp" in the GGUF's tensor name section.
+model_has_mtp() {
+    local gguf_file="$1"
+
+    # Tensor names in GGUF are stored as plain text in the header.
+    # "mtp" is a specific enough marker (output_mtp, mtp_attn_q, mtp_ffn_gate, etc.)
+    # that false positives from other metadata are extremely unlikely.
+    if strings "$gguf_file" 2>/dev/null | grep -q -- 'mtp'; then
+        return 0
+    fi
+    return 1
+}
+
+# Returns true if a GGUF file contains MTP (Multi-Token Prediction) tensors.
+# MTP models have dedicated draft heads with tensor names like:
+#   output_mtp.weight, blk.N.mtp_attn_q.weight, blk.N.mtp_attn_k.weight, blk.N.mtp_ffn_gate.weight
+# Detected by scanning for "mtp" in the GGUF's tensor name section.
+model_has_mtp() {
+    local gguf_file="$1"
+
+    # Tensor names in GGUF are stored as plain text in the header.
+    # "mtp" is a specific enough marker (output_mtp, mtp_attn_q, mtp_ffn_gate, etc.)
+    # that false positives from other metadata are extremely unlikely.
+    if strings "$gguf_file" 2>/dev/null | grep -q -- 'mtp'; then
+        return 0
+    fi
+    return 1
+}
+
 # Derive a unique preset name from a model file path.
 # Uses the parent directory name (relative to MODELS_DIR), cleaned and lowercased.
 # Falls back to filename-based naming for models in the root of MODELS_DIR.
@@ -623,6 +655,19 @@ scan_models_dir() {
             echo "mmproj = $mmproj_path"
         fi
 
+        # Check for MTP (Multi-Token Prediction) support and inject spec config
+        if model_has_mtp "$gguf_file"; then
+            echo "spec-type = draft-mtp"
+            echo "spec-draft-n-max = 3"
+            echo "spec-draft-n-min = 2"
+            echo "spec-draft-p-split = 0.15"
+            echo "spec-draft-p-min = 0.6"
+            echo "spec-draft-ngl = auto"
+            echo "spec-draft-type-k = q8_0"
+            echo "spec-draft-type-v = q8_0"
+            echo "spec-default = true"
+        fi
+
     done < <(find "$scan_dir" -maxdepth "$maxdepth" -name '*.gguf' -not -name '*.gguf.*' -print0 2>/dev/null | sort -z)
 }
 
@@ -662,6 +707,19 @@ scan_hf_cache() {
         mmproj_path="$(find_mmproj "$gguf_file")"
         if [[ -n "$mmproj_path" ]]; then
             echo "mmproj = $mmproj_path"
+        fi
+
+        # Check for MTP (Multi-Token Prediction) support and inject spec config
+        if model_has_mtp "$gguf_file"; then
+            echo "spec-type = draft-mtp"
+            echo "spec-draft-n-max = 3"
+            echo "spec-draft-n-min = 2"
+            echo "spec-draft-p-split = 0.15"
+            echo "spec-draft-p-min = 0.6"
+            echo "spec-draft-ngl = auto"
+            echo "spec-draft-type-k = q8_0"
+            echo "spec-draft-type-v = q8_0"
+            echo "spec-default = true"
         fi
 
         count=$((count + 1))
