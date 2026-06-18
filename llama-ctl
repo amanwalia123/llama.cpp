@@ -281,6 +281,20 @@ cmd_uninstall() {
         esac
     fi
 
+    # Ask explicitly about removing models
+    local remove_models=false
+    if [[ -d "$models_dir" ]]; then
+        local model_file_count
+        model_file_count=$(find "$models_dir" -name '*.gguf' -not -name '*.gguf.*' 2>/dev/null | wc -l)
+        if [[ "$model_file_count" -gt 0 ]]; then
+            read -rp "Remove $model_file_count model file(s) from $models_dir? [y/N] " answer
+            case "$answer" in
+                [yY][eE][sS]|[yY]) remove_models=true ;;
+                *) warn "Keeping model files in $models_dir" ;;
+            esac
+        fi
+    fi
+
     # 1. Remove Binaries
     if [[ -d "$install_dir" ]]; then
         log "Removing binaries from $install_dir..."
@@ -301,12 +315,14 @@ cmd_uninstall() {
         ok "Deleted $models_ini"
     fi
 
-    if [[ -d "$models_dir" ]]; then
-        log "Removing models directory: $models_dir"
-        rm -rf "$models_dir"
-        ok "Deleted $models_dir"
-    else
-        warn "Models directory $models_dir not found. Skipping."
+    if [[ "$remove_models" == true ]]; then
+        if [[ -d "$models_dir" ]]; then
+            log "Removing models directory: $models_dir"
+            rm -rf "$models_dir"
+            ok "Deleted $models_dir"
+        else
+            warn "Models directory $models_dir not found. Skipping."
+        fi
     fi
 
     # 3. Remove Build Artifacts
@@ -589,42 +605,90 @@ cmd_model_add() {
     local final_path="$target"
 
     if [[ -d "$target" ]]; then
-        # Directory: copy all .gguf files to MODELS_DIR and regenerate
+        # Directory: copy new .gguf files to MODELS_DIR, skip pre-existing ones
         if [[ "$copy" == false ]]; then
             err "Directory mode requires --copy flag."
             exit 1
         fi
         mkdir -p "$MODELS_DIR"
-        local count=0
+        local count_new=0 count_skipped=0
         while IFS= read -r -d '' gguf_file; do
             local fname
             fname="$(basename "$gguf_file")"
             is_mmproj_file "$gguf_file" && continue
+            is_shard "$gguf_file" && ! is_first_shard "$gguf_file" && continue
             [[ "$fname" != *.gguf ]] && continue
-            cp "$gguf_file" "$MODELS_DIR/" && count=$((count + 1))
+            [[ "$fname" == *.gguf.* ]] && continue
+
+            local pname
+            pname="$(model_preset_name "$gguf_file" "$MODELS_DIR")"
+
+            # Skip if model already exists in MODELS_DIR (same name + same size)
+            if [[ -f "$MODELS_DIR/$fname" ]]; then
+                local src_size dst_size
+                src_size=$(stat -c%s "$gguf_file" 2>/dev/null || stat -f%z "$gguf_file" 2>/dev/null)
+                dst_size=$(stat -c%s "$MODELS_DIR/$fname" 2>/dev/null || stat -f%z "$MODELS_DIR/$fname" 2>/dev/null)
+                if [[ "$src_size" == "$dst_size" ]]; then
+                    warn "Already present (same file): $fname — skipping"
+                    count_skipped=$((count_skipped + 1))
+                    continue
+                fi
+            fi
+
+            # Skip if preset already registered in models.ini (even if file differs)
+            if [[ -f "$MODELS_INI" ]] && grep -q "^\[$pname\]" "$MODELS_INI" 2>/dev/null; then
+                warn "Already registered: [$pname] — skipping"
+                count_skipped=$((count_skipped + 1))
+                continue
+            fi
+
+            cp "$gguf_file" "$MODELS_DIR/" && count_new=$((count_new + 1))
             # Also copy companion mmproj if any
             local mmproj
             mmproj="$(find_mmproj "$gguf_file")"
-            if [[ -n "$mmproj" ]]; then
+            if [[ -n "$mmproj" && ! -f "$MODELS_DIR/$(basename "$mmproj")" ]]; then
                 cp "$mmproj" "$MODELS_DIR/"
             fi
         done < <(find "$target" -maxdepth 3 -name '*.gguf' -not -name '*.gguf.*' -print0 2>/dev/null)
-        ok "Copied $count model(s) from $target to $MODELS_DIR"
+        ok "Added $count_new new model(s) from $target to $MODELS_DIR"
+        [[ $count_skipped -gt 0 ]] && warn "Skipped $count_skipped pre-existing model(s)"
     elif [[ -f "$target" ]]; then
+        local pname
+        pname="$(model_preset_name "$target" "$target")"
+
         if [[ "$copy" == true ]]; then
             mkdir -p "$MODELS_DIR"
-            cp "$target" "$MODELS_DIR/"
-            final_path="${MODELS_DIR}/$(basename "$target")"
+            local dst_file="$MODELS_DIR/$(basename "$target")"
+
+            # Skip if identical file already exists in MODELS_DIR
+            if [[ -f "$dst_file" ]]; then
+                local src_size dst_size
+                src_size=$(stat -c%s "$target" 2>/dev/null || stat -f%z "$target" 2>/dev/null)
+                dst_size=$(stat -c%s "$dst_file" 2>/dev/null || stat -f%z "$dst_file" 2>/dev/null)
+                if [[ "$src_size" == "$dst_size" ]]; then
+                    warn "File already present in $MODELS_DIR — skipping copy"
+                fi
+            fi
+
+            if [[ ! -f "$dst_file" ]] || [[ "$src_size" != "$dst_size" ]]; then
+                cp "$target" "$MODELS_DIR/"
+                ok "Copied $(basename "$target") to $MODELS_DIR"
+            fi
+            final_path="$dst_file"
             # Also copy companion mmproj if any
             local mmproj
             mmproj="$(find_mmproj "$target")"
-            if [[ -n "$mmproj" ]]; then
+            if [[ -n "$mmproj" && ! -f "$MODELS_DIR/$(basename "$mmproj")" ]]; then
                 cp "$mmproj" "$MODELS_DIR/"
             fi
-            ok "Copied $(basename "$target") to $MODELS_DIR"
         else
-            ok "Referencing model in-place: $target"
             # For in-place references, append section directly to models.ini
+            if [[ -f "$MODELS_INI" ]] && grep -q "^\[$pname\]" "$MODELS_INI" 2>/dev/null; then
+                warn "Preset [$pname] already registered in $MODELS_INI, skipping."
+                return 0
+            fi
+
+            ok "Referencing model in-place: $target"
             mkdir -p "$(dirname "$MODELS_INI")"
             if [[ ! -f "$MODELS_INI" ]]; then
                 echo "version = 1" > "$MODELS_INI"
@@ -632,23 +696,18 @@ cmd_model_add() {
                 echo "[*]" >> "$MODELS_INI"
                 echo "jinja = true" >> "$MODELS_INI"
             fi
-            # Check if preset already exists; skip if so
-            local pname
-            pname="$(model_preset_name "$target" "$target")"
-            if ! grep -q "^\[$pname\]" "$MODELS_INI" 2>/dev/null; then
-                emit_model_section "$target" "$target" >> "$MODELS_INI"
-                ok "Added [$pname] to $MODELS_INI"
-            else
-                warn "Preset [$pname] already exists in $MODELS_INI, skipping."
-            fi
+            emit_model_section "$target" "$target" >> "$MODELS_INI"
+            ok "Added [$pname] to $MODELS_INI"
         fi
     else
         err "Path not found: $target"
         exit 1
     fi
 
-    # Regenerate models.ini
-    regenerate_models_ini
+    # Only regenerate models.ini if we copied files (in-place mode appends directly)
+    if [[ "$copy" == true ]]; then
+        regenerate_models_ini
+    fi
 
     if [[ "$restart" == true ]]; then
         local mux; mux="$(detect_mux)" || { err "No tmux/screen."; exit 1; }
