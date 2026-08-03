@@ -48,6 +48,7 @@
 /debug
 /libllama.so
 /llama-*
+!/llama-ctl
 /vulkan-shaders-gen
 /rpc-server
 /out/
